@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "day2.fullname" . }}-worker
+  labels:
+    {{- include "day2.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "day2.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "day2.componentLabels" (dict "ctx" . "component" "worker") | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/postgres-secret.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        runAsUser: 10001
+        runAsGroup: 10001
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # The worker has no inbound traffic to drain; it exits its poll loop on
+      # SIGTERM after finishing the batch in flight.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: worker
+          image: {{ include "day2.image" (dict "ctx" . "svc" .Values.worker) }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            {{- include "day2.postgresPasswordEnv" . | nindent 12 }}
+            - name: DAY2_DATABASE_URL
+              value: {{ include "day2.databaseUrlTemplate" . | quote }}
+            - name: DAY2_LOG_LEVEL
+              value: {{ .Values.worker.env.logLevel | quote }}
+            - name: DAY2_SERVICE_NAME
+              value: worker
+            - name: DAY2_BATCH_SIZE
+              value: {{ .Values.worker.env.batchSize | quote }}
+            - name: DAY2_POLL_INTERVAL_SECONDS
+              value: {{ .Values.worker.env.pollIntervalSeconds | quote }}
+            - name: DAY2_WORK_DURATION_SECONDS
+              value: {{ .Values.worker.env.workDurationSeconds | quote }}
+            - name: DAY2_MAX_ATTEMPTS
+              value: {{ .Values.worker.env.maxAttempts | quote }}
+            - name: DAY2_HEARTBEAT_PATH
+              value: /tmp/worker-heartbeat
+          # No port to probe, so liveness is the poll-loop heartbeat: a process
+          # that is up but has stopped polling is the failure worth catching.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import sys
+                  from worker.config import get_settings
+                  from worker.runner import heartbeat_is_fresh
+                  s = get_settings()
+                  sys.exit(0 if heartbeat_is_fresh(s.heartbeat_path, s.heartbeat_max_age_seconds) else 1)
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            # readOnlyRootFilesystem is on; the heartbeat file lives here.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
