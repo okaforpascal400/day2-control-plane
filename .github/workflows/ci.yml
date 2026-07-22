@@ -1,0 +1,216 @@
+# Phase 1 pipeline: lint -> test -> scan -> build+scan images -> publish.
+#
+# Everything is pinned (CLAUDE.md rule 2): actions by commit SHA, scanners by
+# image digest, Python tools by exact version. Images are only published from
+# main, and only after every gate above them has passed.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Superseded runs on the same ref are pointless; main is never cancelled so the
+# published image always matches the tip of the branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  RUFF_VERSION: "0.8.4"
+  # Scanners pinned by digest.
+  SYFT_IMAGE: anchore/syft@sha256:13b53ebabe3d215268c90cf8fb9b875f0183908245f376fd4b3a2cb69d21d484
+  TRIVY_IMAGE: aquasec/trivy@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
+  SEMGREP_IMAGE: semgrep/semgrep@sha256:b68f9b68483955b85042dac7b4533757779625a02dcf91e470da4c2df1b430be
+  POSTGRES_IMAGE: postgres@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install ruff
+        run: pip install "ruff==${RUFF_VERSION}"
+      - name: Lint
+        run: ruff check --output-format=github app
+      - name: Check formatting
+        run: ruff format --check app
+
+  test:
+    name: pytest (${{ matrix.service }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker]
+    services:
+      postgres:
+        # Disposable Postgres, same major version the chart deploys.
+        image: postgres@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+        env:
+          POSTGRES_USER: day2
+          POSTGRES_PASSWORD: day2
+          POSTGRES_DB: day2_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U day2"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: app/${{ matrix.service }}/requirements-dev.txt
+      - name: Install dependencies
+        working-directory: app/${{ matrix.service }}
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        working-directory: app/${{ matrix.service }}
+        env:
+          # The api and worker share one schema package, mirroring the images.
+          PYTHONPATH: ${{ github.workspace }}/app/shared
+          DAY2_TEST_DATABASE_URL: postgresql+asyncpg://day2:day2@localhost:5432/day2_test
+        run: pytest -q
+
+  semgrep:
+    name: semgrep
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Static analysis
+        run: |
+          docker run --rm -v "${PWD}:/src" -w /src "${SEMGREP_IMAGE}" \
+            semgrep scan \
+              --config=p/python \
+              --config=p/security-audit \
+              --config=p/secrets \
+              --config=p/dockerfile \
+              --error \
+              --metrics=off \
+              --sarif --output=semgrep.sarif \
+              --text
+      - name: Upload SARIF
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: warn
+          retention-days: 14
+
+  images:
+    name: image (${{ matrix.service }})
+    # Publishing is gated on every other check, so a red lint or a semgrep
+    # finding can never yield a pushed image.
+    needs: [lint, test, semgrep]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            context: app
+            dockerfile: app/api/Dockerfile
+          - service: worker
+            context: app
+            dockerfile: app/worker/Dockerfile
+          - service: web
+            context: app/web
+            dockerfile: app/web/Dockerfile
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Resolve image reference
+        id: ref
+        run: |
+          registry_path="ghcr.io/${GITHUB_REPOSITORY,,}/${{ matrix.service }}"
+          echo "image=${registry_path}" >>"$GITHUB_OUTPUT"
+          echo "local=day2/${{ matrix.service }}:ci" >>"$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          docker build \
+            --file "${{ matrix.dockerfile }}" \
+            --tag "${{ steps.ref.outputs.local }}" \
+            "${{ matrix.context }}"
+
+      - name: Generate SBOM (syft)
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${PWD}:/out" -w /out \
+            "${SYFT_IMAGE}" \
+            "docker:${{ steps.ref.outputs.local }}" \
+            -o "spdx-json=sbom-${{ matrix.service }}.spdx.json" \
+            -o "syft-table"
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom-${{ matrix.service }}
+          path: sbom-${{ matrix.service }}.spdx.json
+          if-no-files-found: error
+          # Phase 5 re-scans stored SBOMs daily for newly disclosed CVEs.
+          retention-days: 90
+
+      - name: Scan image (trivy)
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${HOME}/.cache/trivy:/root/.cache/trivy" \
+            "${TRIVY_IMAGE}" image \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1 \
+              --scanners vuln,secret \
+              --format table \
+              "${{ steps.ref.outputs.local }}"
+
+      # Only main publishes, and only the exact image that was just scanned.
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GHCR
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          # Immutable, traceable tags only — no `latest` (CLAUDE.md rule 2).
+          version="$(grep '^appVersion:' deploy/helm/Chart.yaml | cut -d'"' -f2)"
+          for tag in "${version}" "sha-${GITHUB_SHA::12}"; do
+            docker tag "${{ steps.ref.outputs.local }}" "${{ steps.ref.outputs.image }}:${tag}"
+            docker push "${{ steps.ref.outputs.image }}:${tag}"
+          done
+          echo "Published digest:"
+          docker inspect --format='{{index .RepoDigests 0}}' \
+            "${{ steps.ref.outputs.image }}:${version}"
+
+  helm:
+    name: helm lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Lint chart
+        run: |
+          helm lint deploy/helm -f deploy/helm/values-local.yaml
+          helm template day2 deploy/helm -f deploy/helm/values-local.yaml >/dev/null

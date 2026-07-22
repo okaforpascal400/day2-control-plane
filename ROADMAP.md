@@ -1,20 +1,20 @@
 # ROADMAP — day2-control-plane
 
-> Current phase: 0 — Claude Code: only work the current phase. Update checkboxes in
+> Current phase: 1 — Claude Code: only work the current phase. Update checkboxes in
 > the completing PR. Pascal approves phase transitions.
 
-## Phase 0 — Environment  <-- CURRENT
+## Phase 0 — Environment
 - [x] WSL2 Ubuntu relocated to external SSD (`D:\wsl`)
 - [x] Docker Desktop data-root on external SSD (`D:\DockerDesktopWSL\main`)
 - [x] In WSL: docker CLI, kubectl, kind, helm, terraform, gh, syft, trivy
 - [x] Kind cluster up, hello-world pod running
 - [x] Repo scaffolded, CLAUDE.md + ROADMAP.md in place
 
-## Phase 1 — App + Pipeline
-- [ ] FastAPI api (/health, /items, Postgres); worker; web dashboard
-- [ ] Digest-pinned multi-stage Dockerfiles
-- [ ] Helm chart deploys all + Postgres to Kind
-- [ ] CI: ruff, pytest, build, SBOM, trivy, semgrep, GHCR; green on main
+## Phase 1 — App + Pipeline  <-- CURRENT
+- [x] FastAPI api (/health, /items, Postgres); worker; web dashboard
+- [x] Digest-pinned multi-stage Dockerfiles
+- [x] Helm chart deploys all + Postgres to Kind
+- [x] CI: ruff, pytest, build, SBOM, trivy, semgrep, GHCR; green on main
 
 ## Phase 2 — Cloud + IaC
 - [ ] State backend (S3+DynamoDB); VPC public subnet NO NAT; EC2 spot + k3s
