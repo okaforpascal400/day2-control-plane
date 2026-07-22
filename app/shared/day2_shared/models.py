@@ -17,7 +17,7 @@ class Base(DeclarativeBase):
     pass
 
 
-class JobStatus(str, enum.Enum):
+class JobStatus(enum.StrEnum):
     pending = "pending"
     processing = "processing"
     completed = "completed"
