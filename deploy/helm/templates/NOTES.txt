@@ -1,0 +1,24 @@
+{{ include "day2.fullname" . }} deployed ({{ .Chart.Name }}-{{ .Chart.Version }}, app {{ .Chart.AppVersion }}).
+
+Watch it come up:
+
+  kubectl --namespace {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }} -w
+
+Open the dashboard:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "day2.fullname" . }}-web {{ .Values.web.service.port }}:{{ .Values.web.service.port }}
+  # then browse http://localhost:{{ .Values.web.service.port }}
+
+Talk to the api directly:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "day2.fullname" . }}-api {{ .Values.api.service.port }}:{{ .Values.api.service.port }}
+  curl -s http://localhost:{{ .Values.api.service.port }}/health
+  curl -s -X POST http://localhost:{{ .Values.api.service.port }}/items \
+    -H 'content-type: application/json' -d '{"name":"hello"}'
+  curl -s http://localhost:{{ .Values.api.service.port }}/jobs/stats
+
+{{- if and .Values.postgres.enabled (not .Values.postgres.auth.existingSecret) }}
+
+NOTE: Postgres is using a password from values. That is fine for Kind; for any
+shared environment set `postgres.auth.existingSecret` instead.
+{{- end }}
