@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     service_name: str = Field(default="api")
     # Set false when a migration job owns the schema (Phase 2+).
     create_schema_on_start: bool = Field(default=True)
+    # How long startup waits for Postgres before giving up and failing the pod.
+    database_wait_seconds: float = Field(default=120.0, gt=0)
 
 
 @lru_cache

@@ -27,4 +27,4 @@ extend-immutable-calls = [
 ]
 
 [lint.isort]
-known-first-party = ["api", "worker", "day2_shared"]
+known-first-party = ["api", "worker", "day2_shared", "tests"]

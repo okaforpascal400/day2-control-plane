@@ -9,7 +9,12 @@ from fastapi import FastAPI
 from api import __version__
 from api.config import Settings, get_settings
 from api.routes import health, items, jobs
-from day2_shared.db import create_schema, make_engine, make_sessionmaker
+from day2_shared.db import (
+    create_schema,
+    make_engine,
+    make_sessionmaker,
+    wait_for_database,
+)
 from day2_shared.logging import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -23,6 +28,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.sessionmaker = make_sessionmaker(engine)
 
     if settings.create_schema_on_start:
+        # Wait rather than exit: Postgres may still be starting alongside us, and
+        # a startup crash costs a CrashLoopBackOff delay on every retry.
+        await wait_for_database(engine, timeout_seconds=settings.database_wait_seconds)
         await create_schema(engine)
         logger.info("schema ready")
 

@@ -43,6 +43,37 @@ async def create_schema(engine: AsyncEngine) -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+async def wait_for_database(
+    engine: AsyncEngine,
+    *,
+    timeout_seconds: float = 120.0,
+    interval_seconds: float = 2.0,
+) -> None:
+    """Block until Postgres accepts a connection.
+
+    Pod start order is not guaranteed, so a service that dies when the database
+    is not up yet turns an ordinary rollout into a CrashLoopBackOff. Waiting is
+    both quieter and faster than restarting into exponential backoff.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            async with engine.connect() as conn:
+                await conn.scalar(text("SELECT 1"))
+            if attempt > 1:
+                logger.info("database available", extra={"attempt": attempt})
+            return
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError(f"timed out waiting for database: {reason}")
+        logger.info("waiting for database", extra={"attempt": attempt, "reason": reason})
+        await asyncio.sleep(interval_seconds)
+
+
 async def wait_for_schema(
     engine: AsyncEngine,
     table: str,

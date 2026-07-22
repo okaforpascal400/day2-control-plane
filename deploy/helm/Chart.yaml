@@ -1,0 +1,10 @@
+apiVersion: v2
+name: day2-control-plane
+description: Demo workload for day2-control-plane — api, worker, dashboard, and Postgres.
+type: application
+# Chart version tracks the chart; appVersion tracks the services it deploys.
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+maintainers:
+  - name: Pascal Okafor
