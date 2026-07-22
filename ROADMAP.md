@@ -4,10 +4,10 @@
 > the completing PR. Pascal approves phase transitions.
 
 ## Phase 0 — Environment  <-- CURRENT
-- [ ] WSL2 Ubuntu relocated to external SSD
-- [ ] Docker Desktop data-root on external SSD
-- [ ] In WSL: docker CLI, kubectl, kind, helm, terraform, gh, syft, trivy
-- [ ] Kind cluster up, hello-world pod running
+- [x] WSL2 Ubuntu relocated to external SSD (`D:\wsl`)
+- [x] Docker Desktop data-root on external SSD (`D:\DockerDesktopWSL\main`)
+- [x] In WSL: docker CLI, kubectl, kind, helm, terraform, gh, syft, trivy
+- [x] Kind cluster up, hello-world pod running
 - [x] Repo scaffolded, CLAUDE.md + ROADMAP.md in place
 
 ## Phase 1 — App + Pipeline
