@@ -1,0 +1,7 @@
+# Runtime deps, exact pins per CLAUDE.md rule 2 (no floating versions).
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+pydantic==2.10.4
+pydantic-settings==2.7.0

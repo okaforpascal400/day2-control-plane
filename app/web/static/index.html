@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>day2-control-plane — dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>day2-control-plane</h1>
+      <p class="sub">Demo workload dashboard — items and the job queue draining behind them.</p>
+      <p id="status" class="status" role="status"></p>
+    </header>
+
+    <main>
+      <section aria-labelledby="queue-heading">
+        <h2 id="queue-heading">Job queue</h2>
+        <ul id="stats" class="stats"></ul>
+        <table>
+          <caption class="sr-only">Most recent jobs</caption>
+          <thead>
+            <tr>
+              <th scope="col">Job</th>
+              <th scope="col">Item</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Status</th>
+              <th scope="col">Attempts</th>
+              <th scope="col">Duration</th>
+            </tr>
+          </thead>
+          <tbody id="jobs"></tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="items-heading">
+        <h2 id="items-heading">Items</h2>
+        <form id="item-form" autocomplete="off">
+          <label class="sr-only" for="item-name">Name</label>
+          <input id="item-name" name="name" placeholder="Item name" required maxlength="200" />
+          <label class="sr-only" for="item-description">Description</label>
+          <input id="item-description" name="description" placeholder="Description (optional)" maxlength="500" />
+          <button type="submit">Add item</button>
+        </form>
+        <table>
+          <caption class="sr-only">Most recent items</caption>
+          <thead>
+            <tr>
+              <th scope="col">ID</th>
+              <th scope="col">Name</th>
+              <th scope="col">Description</th>
+              <th scope="col">Created</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="items"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
