@@ -1,0 +1,67 @@
+# Kind overrides.
+#
+# Images are built locally and side-loaded, so there is no registry to pull from
+# and no digest to pin against:
+#
+#   docker build -f app/api/Dockerfile    -t day2/api:0.1.0    app
+#   docker build -f app/worker/Dockerfile -t day2/worker:0.1.0 app
+#   docker build -f app/web/Dockerfile    -t day2/web:0.1.0    app/web
+#   kind load docker-image day2/api:0.1.0 day2/worker:0.1.0 day2/web:0.1.0 --name day2
+#   helm install day2 deploy/helm -f deploy/helm/values-local.yaml
+#
+# `Never` is intentional: it fails loudly if an image was not side-loaded rather
+# than silently reaching out to a registry for something that is not there.
+imagePullPolicy: Never
+
+# Keeps object names short on a demo cluster: day2-api rather than the default
+# day2-day2-control-plane-api.
+fullnameOverride: day2
+
+image:
+  registry: ""
+  repository: day2
+  tag: "0.1.0"
+
+api:
+  # One replica keeps a single-node Kind cluster light; the chart supports more.
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      memory: 256Mi
+
+worker:
+  replicaCount: 1
+  env:
+    pollIntervalSeconds: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      memory: 256Mi
+
+web:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      memory: 64Mi
+
+postgres:
+  auth:
+    # Local throwaway credential. Never used outside Kind; cloud environments set
+    # `postgres.auth.existingSecret` instead (CLAUDE.md: secrets via env/SSM only).
+    password: day2-local-dev
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi

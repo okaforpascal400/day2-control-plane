@@ -1,0 +1,5 @@
+# Runtime deps, exact pins per CLAUDE.md rule 2 (no floating versions).
+sqlalchemy==2.0.51
+asyncpg==0.31.0
+pydantic==2.13.4
+pydantic-settings==2.14.2

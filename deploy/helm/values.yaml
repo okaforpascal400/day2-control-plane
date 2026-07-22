@@ -1,0 +1,121 @@
+# Defaults target a real cluster: images come from GHCR pinned by digest.
+# `values-local.yaml` overrides these for Kind, where images are side-loaded.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Applied to every image unless overridden per service.
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+image:
+  registry: ghcr.io
+  # Owner/repo prefix; the service name is appended (…/day2-control-plane/api).
+  repository: okaforpascal400/day2-control-plane
+  # Set per service below. A digest, when present, always wins over the tag so
+  # deployments are immutable (CLAUDE.md rule 2).
+  tag: "0.1.0"
+
+api:
+  replicaCount: 2
+  image:
+    name: api
+    tag: ""
+    digest: ""
+  service:
+    type: ClusterIP
+    port: 8000
+  env:
+    logLevel: INFO
+    createSchemaOnStart: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+worker:
+  replicaCount: 1
+  image:
+    name: worker
+    tag: ""
+    digest: ""
+  env:
+    logLevel: INFO
+    batchSize: 10
+    pollIntervalSeconds: 2
+    workDurationSeconds: 0.25
+    maxAttempts: 3
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+web:
+  replicaCount: 1
+  image:
+    name: web
+    tag: ""
+    digest: ""
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+postgres:
+  # In-cluster Postgres is deliberate: managed databases are outside the cost
+  # ceiling (CLAUDE.md rule 1). Backups and restore land in Phase 7.
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16.6-alpine"
+    digest: "sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef"
+    # Postgres comes from a public registry, so it keeps a pulling policy even
+    # when the app images are side-loaded into Kind with `Never`.
+    pullPolicy: IfNotPresent
+  auth:
+    database: day2
+    username: day2
+    # Dev-only default. Real environments supply this via an existing Secret.
+    password: ""
+    # When set, the chart creates no Secret and reads credentials from this one.
+    existingSecret: ""
+    secretPasswordKey: postgres-password
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    size: 2Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
+
+# Applied to every pod; overridable if a workload genuinely needs more.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
