@@ -23,7 +23,6 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
-  RUFF_VERSION: "0.8.4"
   # Scanners pinned by digest.
   SYFT_IMAGE: anchore/syft@sha256:13b53ebabe3d215268c90cf8fb9b875f0183908245f376fd4b3a2cb69d21d484
   TRIVY_IMAGE: aquasec/trivy@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
@@ -40,7 +39,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install ruff
-        run: pip install "ruff==${RUFF_VERSION}"
+        # Read the pin from requirements-dev so CI and local runs can never
+        # drift onto different lint rules.
+        run: |
+          ruff_pin="$(grep -E '^ruff==' app/api/requirements-dev.txt)"
+          echo "Installing ${ruff_pin}"
+          pip install "${ruff_pin}"
       - name: Lint
         run: ruff check --output-format=github app
       - name: Check formatting
@@ -81,8 +85,8 @@ jobs:
       - name: Run tests
         working-directory: app/${{ matrix.service }}
         env:
-          # The api and worker share one schema package, mirroring the images.
-          PYTHONPATH: ${{ github.workspace }}/app/shared
+          # Import roots (including the shared schema package) come from each
+          # service's pytest.ini, so this needs no PYTHONPATH of its own.
           DAY2_TEST_DATABASE_URL: postgresql+asyncpg://day2:day2@localhost:5432/day2_test
         run: pytest -q
 
