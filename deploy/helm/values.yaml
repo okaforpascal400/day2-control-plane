@@ -70,6 +70,22 @@ web:
     limits:
       memory: 128Mi
 
+# Off by default: Kind reaches the dashboard through `kubectl port-forward`, so
+# only an environment with a real ingress controller in front of it turns this
+# on (see values-aws.yaml, where k3s's bundled Traefik serves it on port 80).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # An empty `host` emits a rule with no host match — right for reaching a node
+  # by bare IP, since there is no DNS name to match on.
+  hosts:
+    - host: ""
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
 postgres:
   # In-cluster Postgres is deliberate: managed databases are outside the cost
   # ceiling (CLAUDE.md rule 1). Backups and restore land in Phase 7.
