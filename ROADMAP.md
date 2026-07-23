@@ -17,7 +17,7 @@
 - [x] CI: ruff, pytest, build, SBOM, trivy, semgrep, GHCR; green on main
 
 ## Phase 2 — Cloud + IaC
-- [ ] State backend (S3+DynamoDB); VPC public subnet NO NAT; EC2 spot + k3s
+- [x] State backend (S3+DynamoDB); VPC public subnet NO NAT; EC2 spot + k3s
 - [ ] Tag-triggered deploy; cost-sentinel workflow
 - [ ] Verified: terraform destroy leaves zero orphans
 
