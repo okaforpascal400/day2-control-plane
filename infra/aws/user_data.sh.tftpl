@@ -1,0 +1,28 @@
+#!/bin/bash
+# cloud-init user-data: install a pinned single-node k3s.
+# Rendered by Terraform templatefile: k3s_version is the only interpolation.
+set -euxo pipefail
+
+# The public IPv4 is dynamic (no EIP). Add it as a TLS SAN so the kubeconfig
+# this node emits is valid for remote kubectl over the internet. IMDSv2.
+TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/public-ipv4)
+
+# Pin k3s (CLAUDE.md rule 2). write-kubeconfig-mode 644 so the ubuntu user can
+# read it; --tls-san makes the served cert valid for the public IP.
+export INSTALL_K3S_VERSION="${k3s_version}"
+curl -sfL https://get.k3s.io | sh -s - \
+  --write-kubeconfig-mode=644 \
+  --tls-san="$PUBLIC_IP"
+
+# Drop a fetch-ready kubeconfig with the public IP baked in (server field is
+# 127.0.0.1 by default). Consumed by the deploy workflow / local kubectl.
+mkdir -p /home/ubuntu/.kube
+sed "s#https://127.0.0.1:6443#https://$PUBLIC_IP:6443#" \
+  /etc/rancher/k3s/k3s.yaml > /home/ubuntu/.kube/config
+chown -R ubuntu:ubuntu /home/ubuntu/.kube
+chmod 600 /home/ubuntu/.kube/config
+
+echo "k3s ${k3s_version} ready on $PUBLIC_IP" > /var/log/day2-bootstrap.done
