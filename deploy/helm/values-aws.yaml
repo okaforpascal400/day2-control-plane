@@ -30,7 +30,8 @@ api:
   # Two replicas on a single node is still worth doing: it proves the Service
   # load-balances and that a rolling update has somewhere to land.
   #
-  # KNOWN ISSUE (observed on the 2026-07-23 first deploy, not yet fixed): with
+  # KNOWN ISSUE — github.com/okaforpascal400/day2-control-plane/issues/3
+  # (observed on the 2026-07-23 first deploy, not yet fixed): with
   # createSchemaOnStart and an empty database, both replicas run
   # `Base.metadata.create_all` at once. create_all's checkfirst is a TOCTOU
   # race across two connections, so the loser dies with
