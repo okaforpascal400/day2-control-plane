@@ -29,6 +29,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -79,20 +80,50 @@ def _parse_launch_time(value: str) -> dt.datetime | None:
         return None
 
 
+def resolve_cli() -> str:
+    """Resolve the AWS CLI binary, allowing an override only to another AWS CLI.
+
+    AWS_CLI exists so the script can be run by hand against a live account (under
+    WSL that means pointing at `aws.exe`). Constraining the basename keeps it a
+    convenience rather than an arbitrary-binary execution primitive: the override
+    can select *which* aws to run, never *what* to run. Every other element of
+    every command below is a literal in this file, and nothing is passed through
+    a shell.
+    """
+    raw = os.environ.get("AWS_CLI", "aws")
+    if os.path.basename(raw).lower() not in {"aws", "aws.exe"}:
+        raise ValueError(
+            f"AWS_CLI must name an aws binary (aws or aws.exe), got {raw!r}"
+        )
+    resolved = shutil.which(raw)
+    if resolved is None:
+        raise FileNotFoundError(f"AWS CLI not found: {raw!r}")
+    return resolved
+
+
 def aws(report: Report, label: str, *args: str, region: str | None = None) -> Any | None:
     """Run one read-only AWS CLI call, returning parsed JSON.
 
     A sentinel that dies on one missing grant silently stops checking everything
     after it, so a denial is recorded as a visible gap and the run continues.
     """
-    cli = os.environ.get("AWS_CLI", "aws")
+    try:
+        cli = resolve_cli()
+    except (ValueError, FileNotFoundError) as exc:
+        report.add("unchecked", label, str(exc))
+        return None
+
     cmd = [cli, *args, "--output", "json"]
     if region:
         cmd += ["--region", region]
     try:
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        # cmd[0] is validated by resolve_cli() above (basename allowlisted, then
+        # resolved through PATH); every other element is a literal constant in
+        # this file. No shell, list form — there is no injection surface.
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-    except FileNotFoundError:
-        report.add("unchecked", label, f"AWS CLI not found (tried `{cli}`)")
+    except OSError as exc:
+        report.add("unchecked", label, f"could not execute the AWS CLI: {exc}")
         return None
     except subprocess.TimeoutExpired:
         report.add("unchecked", label, "call timed out after 90s")
