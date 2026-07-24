@@ -1,6 +1,12 @@
 # ADR 0002: Cost-sentinel AWS authentication
 
-**Status:** proposed — awaiting Pascal's decision. Nothing implemented.
+**Status:** accepted 2026-07-24 (Pascal). Implemented as code; the IAM role
+itself is a manual admin step, tracked in `infra/iam/README.md`.
+
+**Decision as approved:** OIDC role; read-only `Describe*`/`List*` only; trust
+policy pinned to `okaforpascal400/day2-control-plane`. The deploy-workflow
+ingress-fixer role is explicitly **not** approved — documented as a future
+option only.
 
 ## Context
 
@@ -74,20 +80,32 @@ One-time, by the account owner with admin credentials:
    }
    ```
 
-3. Attach a read-only policy — no `ce:*` wildcard, just the calls the sentinel
-   makes. Which calls depends on the data source, which is a **separate open
-   question** worth settling in the same sitting:
+3. Attach a read-only policy — `infra/iam/day2-cost-sentinel-policy.json`.
 
-   | Source | Permission | Cost | Granularity |
-   |---|---|---|---|
-   | Cost Explorer `GetCostAndUsage` | `ce:GetCostAndUsage` | **charged per request** (~$0.01 — confirm against current pricing) | per-service, per-day |
-   | AWS Budgets | `budgets:ViewBudget` | free for the first two budgets | threshold state only |
-   | CloudWatch `AWS/Billing` `EstimatedCharges` | `cloudwatch:GetMetricStatistics` | free | account total, ~6h refresh, us-east-1 only |
+### Data source: resource inventory, not Cost Explorer
 
-   A daily Cost Explorer call is a few cents a month and gives per-service
-   detail worth having; a chattier sentinel is not. Whatever is chosen, the
-   sentinel is **read-only** — it reports, it does not stop instances. Acting on
-   spend is a human decision (rule 3).
+Settled alongside the auth decision. The approved scope is **describe/list
+only**, which rules out `ce:GetCostAndUsage` — and that turns out to be the
+better sentinel anyway:
+
+| Source | Permission | Cost | Lag |
+|---|---|---|---|
+| **`Describe*`/`List*` inventory (chosen)** | `ec2:Describe*`, `eks:ListClusters`, `rds:DescribeDBInstances` | free | none — reflects the account right now |
+| Cost Explorer `GetCostAndUsage` | `ce:GetCostAndUsage` | charged per request (~$0.01 — confirm against current pricing) | ~a day |
+| CloudWatch `AWS/Billing` | `cloudwatch:GetMetricStatistics` | free | ~6h, account total only, us-east-1 |
+
+Spend data arrives too late to be useful here. A node left running after a demo
+shows up in Cost Explorer the *next day*, having already burned a night's worth
+of hours; `DescribeInstances` sees it immediately. So the sentinel counts
+resources rather than dollars, and derives burn rate from **live**
+`DescribeSpotPriceHistory` quotes rather than any hardcoded price (rule 5).
+
+It also lets the sentinel enforce the *architectural* half of rule 1 — a NAT
+gateway, an EKS cluster, or an RDS instance is flagged the moment it exists,
+which no spend metric would surface until it had already cost money.
+
+The sentinel is **read-only** — it reports, it does not stop instances. Acting
+on a finding is a human decision (rule 3).
 
 In the workflow: `permissions: id-token: write` plus `contents: read`, and
 `aws-actions/configure-aws-credentials` pinned by commit SHA like every other
@@ -101,11 +119,15 @@ node, because the security group admits only the operator's /32. One fix is to
 let the workflow authorize its own runner IP just-in-time and revoke it
 afterward — which needs AWS credentials in CI, i.e. this same decision.
 
-If OIDC is adopted, that should be a **second, separate role** gated on
+**Not approved, not implemented — recorded as a future option only.** If it is
+ever built it must be a **second, separate role** gated on
 `repo:...:environment:cloud`, not extra permissions bolted onto the sentinel
 role: `ec2:AuthorizeSecurityGroupIngress` is a write action against the very
 control that keeps the node private, and it has no business sharing a principal
 with a spend reader.
+
+Until then the `deploy` job stays inert, and tags are applied from the
+operator's machine using the artifact the `release` job publishes.
 
 ## Consequences
 
