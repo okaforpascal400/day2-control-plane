@@ -1,0 +1,92 @@
+# k3s-on-EC2 overrides (the `infra/aws` stack).
+#
+# The counterpart to values-local.yaml: same chart, real registry. Images are
+# pulled from GHCR and pinned by digest rather than tag, so what runs here is
+# byte-identical to what CI built and trivy scanned (CLAUDE.md rule 2).
+#
+#   helm upgrade --install day2 deploy/helm -f deploy/helm/values-aws.yaml
+#
+# The GHCR packages are public, so the node pulls anonymously and the chart
+# needs no imagePullSecrets. If they are ever made private, add one here.
+
+# Keeps object names short: day2-api rather than day2-day2-control-plane-api.
+fullnameOverride: day2
+
+imagePullPolicy: IfNotPresent
+
+image:
+  registry: ghcr.io
+  repository: okaforpascal400/day2-control-plane
+  tag: "0.1.0"
+
+# Digests for the 0.1.0 images published by the `ci` workflow from main
+# (commit ba4992687d13). The chart prefers a digest over a tag, so these are
+# what actually gets pulled — the tag above is left only as documentation of
+# which release the digests belong to.
+#
+# Re-read them with:
+#   crane digest ghcr.io/okaforpascal400/day2-control-plane/api:0.1.0
+api:
+  # Two replicas on a single node is still worth doing: it proves the Service
+  # load-balances and that a rolling update has somewhere to land.
+  #
+  # KNOWN ISSUE — github.com/okaforpascal400/day2-control-plane/issues/3
+  # (observed on the 2026-07-23 first deploy, not yet fixed): with
+  # createSchemaOnStart and an empty database, both replicas run
+  # `Base.metadata.create_all` at once. create_all's checkfirst is a TOCTOU
+  # race across two connections, so the loser dies with
+  # `UniqueViolationError: ... items_id_seq already exists` and exit 3.
+  # Kubernetes restarts it and the second attempt is a clean no-op, so the
+  # deployment converges on its own — cost is one restart and ~20s on a
+  # first-ever deploy against a fresh volume. Real fix (schema ownership moved
+  # out of app startup, e.g. an Alembic migration Job or a pg advisory lock) is
+  # app-layer work and belongs to a later phase, not to Phase 2's IaC scope.
+  replicaCount: 2
+  image:
+    digest: "sha256:90304f62f56c02894408fc75f7583c634e371795dfe482f69eb9c0a845b18c3a"
+
+worker:
+  replicaCount: 1
+  image:
+    digest: "sha256:0d6feb95f897b8c8d6a1959fa7878c7323b467e3a4569aeddf24b4be56b2f601"
+
+web:
+  replicaCount: 1
+  image:
+    digest: "sha256:7b5b643225e45f184bee845c38e570d50e0769cbe7dfb9be8a2622043efbfe93"
+
+# k3s bundles Traefik and binds it to host ports 80/443 — the only app ports the
+# node security group lets through (NodePorts, at 30000+, are firewalled off).
+# No host: the node has a public IP and no DNS name, so the rule matches any
+# Host header and the dashboard answers on http://<public-ip>/.
+ingress:
+  enabled: true
+  className: traefik
+  hosts:
+    - host: ""
+      paths:
+        - path: /
+          pathType: Prefix
+
+postgres:
+  auth:
+    # No password in git. The Secret is created out of band against the cluster
+    # and merely referenced here (CLAUDE.md: secrets via env/SSM only):
+    #
+    #   kubectl create secret generic day2-postgres-auth \
+    #     --from-literal=postgres-password="$(openssl rand -base64 24)"
+    #
+    # Phase 7 moves this to SSM Parameter Store so a rebuilt node can recover
+    # the credential instead of needing a fresh one.
+    existingSecret: day2-postgres-auth
+    secretPasswordKey: postgres-password
+  persistence:
+    enabled: true
+    # local-path (k3s's default provisioner) writes to the node's gp3 root
+    # volume, which is delete_on_termination — so this is scratch, not durable
+    # storage. Backups are Phase 7.
+    size: 2Gi
+
+# t3.small is 2 vCPU / 2 GiB and k3s itself wants a chunk of that. These are the
+# chart defaults, restated here so the total is easy to check against the node:
+# 270m CPU / 608Mi memory requested across all six pods.
