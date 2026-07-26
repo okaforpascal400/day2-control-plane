@@ -7,8 +7,18 @@ venv/
 **/.terraform/
 *.tfstate
 *.tfstate.*
+# Exception: the state-backend is a bootstrap stack — it creates the very
+# S3 bucket + DynamoDB table that every other stack uses as its remote
+# backend, so its own state cannot live in that backend (chicken-and-egg).
+# We keep this one state file in git. Verified secret-free (SSE-S3, no KMS,
+# no credentials in state); only public ARNs/account-id are present.
+!infra/state-backend/terraform.tfstate
 *.tfvars
 !example.tfvars
+# Fetched from the k3s node — embeds a cluster-admin client cert and key.
+# Regenerate with the `kubeconfig_fetch` output of infra/aws; never commit.
+kubeconfig-*
+tfplan
 node_modules/
 dist/
 .env

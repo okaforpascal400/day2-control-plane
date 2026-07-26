@@ -1,0 +1,233 @@
+# Tag-triggered deploy to the k3s node from infra/aws.
+#
+# Split in two on purpose:
+#
+#   release  runs on every v* tag, needs no cluster and no secrets. It proves
+#            the tag is deployable — images published, digests resolved, chart
+#            renders — and uploads the exact manifests that would be applied.
+#   deploy   actually applies them, behind the `cloud` GitHub Environment so a
+#            human approves before anything touches the cluster (CLAUDE.md
+#            rule 3). Skips cleanly when the cluster does not exist, which is
+#            its normal state — this stack is ephemeral by design.
+#
+# The cluster is reached over a plain SSH tunnel rather than by exposing 6443:
+# k3s's serving cert already covers 127.0.0.1, so forwarding a local port and
+# pointing helm at it needs only port 22 open. Nothing but the SSH key is
+# stored, and no kubeconfig is ever committed. (Verified by hand against a live
+# node on 2026-07-23 — kubectl and helm both work through the tunnel.)
+#
+# NETWORK PREREQUISITE, currently unmet: the node's security group admits only
+# `allowed_cidr` — the operator's /32. A GitHub-hosted runner has an arbitrary
+# egress IP and cannot open port 22, so the `deploy` job will time out if it is
+# ever enabled as-is. Closing that gap is a deliberate decision, not an
+# oversight; the options are just-in-time SG authorization from the workflow
+# (needs AWS credentials in CI, which is exactly the OIDC-vs-stored-key question
+# the cost-sentinel design raises), a self-hosted runner on the node, or leaving
+# `deploy` permanently skipped and applying tags from the operator's machine
+# using the artifact that `release` publishes. Until that is settled, `deploy`
+# stays inert: `vars.DEPLOY_HOST` is unset, so the job never runs.
+name: deploy
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to deploy (defaults to the checked-out ref)"
+        required: false
+        type: string
+
+# Never deploy two tags concurrently; never cancel one midway through a helm
+# upgrade — a half-applied release is worse than a queued one.
+concurrency:
+  group: deploy-cloud
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  CHART: deploy/helm
+
+jobs:
+  release:
+    name: verify + render
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      api_digest: ${{ steps.digests.outputs.api }}
+      worker_digest: ${{ steps.digests.outputs.worker }}
+      web_digest: ${{ steps.digests.outputs.web }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # The tag is the release identity; the chart's appVersion is what the
+      # image tags were published under. If they disagree the deploy would pull
+      # something other than what the tag names, so stop here.
+      - name: Resolve and check version
+        id: version
+        run: |
+          set -euo pipefail
+          ref="${{ inputs.tag || github.ref_name }}"
+          version="${ref#v}"
+          app_version="$(grep '^appVersion:' "${CHART}/Chart.yaml" | cut -d'"' -f2)"
+          if [ "${version}" != "${app_version}" ]; then
+            echo "::error::tag ${ref} implies version ${version}, but ${CHART}/Chart.yaml appVersion is ${app_version}. Bump the chart before tagging."
+            exit 1
+          fi
+          echo "version=${version}" >>"$GITHUB_OUTPUT"
+          echo "Deploying version ${version} from ${ref}"
+
+      # Resolve tag -> digest once, here, and deploy by digest everywhere after.
+      # A tag can be moved; a digest cannot. This also fails loudly when `ci`
+      # has not published the images for this version yet.
+      - name: Resolve image digests
+        id: digests
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          repo="${REGISTRY}/${GITHUB_REPOSITORY,,}"
+          for svc in api worker web; do
+            ref="${repo}/${svc}:${VERSION}"
+            # Parsed out of the default output rather than via --format: the
+            # template flag is a no-op on some buildx builds, and silently
+            # yields the human-readable block instead of a bare digest.
+            if ! out="$(docker buildx imagetools inspect "${ref}" 2>/dev/null)"; then
+              echo "::error::${ref} is not published. The ci workflow publishes images only from main — merge and let it finish before tagging."
+              exit 1
+            fi
+            digest="$(awk '/^Digest:/{print $2; exit}' <<<"${out}")"
+            case "${digest}" in
+              sha256:*) ;;
+              *) echo "::error::could not parse a digest for ${ref} (got '${digest}')"; exit 1 ;;
+            esac
+            echo "${svc}: ${digest}"
+            echo "${svc}=${digest}" >>"$GITHUB_OUTPUT"
+          done
+
+      # values-aws.yaml carries digests for the release it was written against.
+      # Rather than trust that file to be current, overlay the digests just
+      # resolved from the tag — the overlay is what gets applied and archived.
+      - name: Build release overlay
+        env:
+          API: ${{ steps.digests.outputs.api }}
+          WORKER: ${{ steps.digests.outputs.worker }}
+          WEB: ${{ steps.digests.outputs.web }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat >values-release.yaml <<EOF
+          # Generated by .github/workflows/deploy.yml for ${VERSION} (${GITHUB_SHA}).
+          # Layered over values-aws.yaml; digests resolved from the tag at deploy time.
+          image:
+            tag: "${VERSION}"
+          api:
+            image:
+              digest: "${API}"
+          worker:
+            image:
+              digest: "${WORKER}"
+          web:
+            image:
+              digest: "${WEB}"
+          EOF
+          cat values-release.yaml
+
+      - name: Lint and render
+        run: |
+          set -euo pipefail
+          helm lint "${CHART}" -f "${CHART}/values-aws.yaml" -f values-release.yaml
+          helm template day2 "${CHART}" \
+            -f "${CHART}/values-aws.yaml" -f values-release.yaml >rendered.yaml
+          echo "Rendered $(grep -c '^kind:' rendered.yaml) objects."
+          grep -E '^\s+image:' rendered.yaml
+
+      # The audit trail for this tag: exactly what would hit the cluster, kept
+      # whether or not the deploy job ever runs.
+      - name: Upload release manifests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ steps.version.outputs.version }}
+          path: |
+            values-release.yaml
+            rendered.yaml
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    name: apply to k3s
+    needs: release
+    runs-on: ubuntu-24.04
+    # Human-in-the-loop: configure `cloud` with Pascal as a required reviewer so
+    # a tag can never deploy itself unattended (CLAUDE.md rule 3).
+    environment:
+      name: cloud
+      url: http://${{ vars.DEPLOY_HOST }}/
+    # The cluster is usually destroyed. Absent connection details, this is a
+    # no-op rather than a failure — `release` above has already done the part
+    # that is always meaningful.
+    if: vars.DEPLOY_HOST != ''
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download release manifests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-${{ needs.release.outputs.version }}
+
+      - name: Open an SSH tunnel to the k3s API
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${DEPLOY_SSH_KEY}" >~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          ssh-keyscan -H "${DEPLOY_HOST}" >>~/.ssh/known_hosts 2>/dev/null
+
+          # k3s serves a cert valid for 127.0.0.1, so the fetched kubeconfig
+          # works unmodified through a forwarded local port.
+          ssh -i ~/.ssh/deploy -o BatchMode=yes -f -N \
+            -L 6443:127.0.0.1:6443 "ubuntu@${DEPLOY_HOST}"
+          scp -i ~/.ssh/deploy -o BatchMode=yes \
+            "ubuntu@${DEPLOY_HOST}:.kube/config" ./kubeconfig
+          # That copy points at the public IP; the tunnel is on localhost.
+          sed -i "s#https://${DEPLOY_HOST}:6443#https://127.0.0.1:6443#" ./kubeconfig
+          chmod 600 ./kubeconfig
+          KUBECONFIG=./kubeconfig kubectl get nodes
+
+      - name: Helm upgrade
+        env:
+          KUBECONFIG: ./kubeconfig
+        run: |
+          set -euo pipefail
+          helm upgrade --install day2 "${CHART}" \
+            -f "${CHART}/values-aws.yaml" \
+            -f values-release.yaml \
+            --wait --timeout 8m
+          kubectl get pods -o wide
+
+      # An `helm --wait` success only means the pods passed their probes. Prove
+      # the release actually serves traffic on the path a browser would take.
+      - name: Smoke test
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 10 "http://${DEPLOY_HOST}/api/health" | tee /dev/stderr | grep -q '"status":"ok"'; then
+              echo "Dashboard origin healthy."
+              exit 0
+            fi
+            echo "attempt ${i}: not healthy yet"; sleep 6
+          done
+          echo "::error::deployed release did not answer /api/health"
+          exit 1
+
+      - name: Close the tunnel
+        if: always()
+        run: pkill -f 'ssh -i .*deploy' || true

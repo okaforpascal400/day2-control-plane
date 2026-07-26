@@ -1,0 +1,132 @@
+# Cost sentinel — the enforcement behind CLAUDE.md rule 1 (~$15/mo ceiling) and
+# rule 6 (destroy leaves zero orphans).
+#
+# Resource-based, not spend-based: it asks "is anything running right now that
+# shouldn't be?" rather than waiting for Cost Explorer, whose data lags about a
+# day and which bills per request. Every AWS call is a Describe or a List, and
+# the approved scope is read-only — the sentinel opens an issue, it never stops
+# or deletes anything. Acting on the finding is Pascal's call (rule 3).
+#
+# Auth is GitHub OIDC (ADR 0002): no long-lived AWS key exists for this repo.
+# Until the role is created, `vars.AWS_SENTINEL_ROLE_ARN` is unset and the job
+# skips — the workflow is deliberately inert rather than red. Setup steps are in
+# infra/iam/README.md.
+name: cost-sentinel
+
+on:
+  schedule:
+    # Every 6h: catches a node left running overnight within one cycle, at zero
+    # cost since Describe calls are free.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      max_runtime_hours:
+        description: "Flag instances running longer than this many hours"
+        required: false
+        default: "8"
+        type: string
+
+concurrency:
+  group: cost-sentinel
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sentinel:
+    name: inventory
+    runs-on: ubuntu-24.04
+    # Unset until the OIDC role exists; see infra/iam/README.md.
+    if: vars.AWS_SENTINEL_ROLE_ARN != ''
+    permissions:
+      contents: read
+      id-token: write # mint the OIDC token for AssumeRoleWithWebIdentity
+      issues: write # the sentinel's only output
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Assume the read-only sentinel role
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_SENTINEL_ROLE_ARN }}
+          aws-region: ap-southeast-2
+          # Surfaces the run in CloudTrail — one of the reasons OIDC won over a
+          # stored key (ADR 0002).
+          role-session-name: cost-sentinel-${{ github.run_id }}
+
+      # Exit codes: 0 clean, 1 findings, 2 the sentinel itself broke. 2 must not
+      # be mistaken for either of the others — a sentinel that cannot see is not
+      # a sentinel that found nothing.
+      - name: Run sentinel
+        id: run
+        run: |
+          set +e
+          python3 .github/scripts/cost_sentinel.py \
+            --max-runtime-hours "${{ inputs.max_runtime_hours || '8' }}" \
+            --json-out sentinel.json >report.md 2>report.err
+          rc=$?
+          set -e
+          cat report.md
+          [ -s report.err ] && cat report.err >&2
+          echo "rc=${rc}" >>"$GITHUB_OUTPUT"
+          cat report.md >>"$GITHUB_STEP_SUMMARY"
+          if [ "${rc}" = "2" ]; then
+            echo "::error::sentinel could not complete its checks — treat as unknown, not clean"
+            exit 2
+          fi
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cost-sentinel-${{ github.run_id }}
+          path: |
+            report.md
+            sentinel.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # One rolling issue rather than a new one every 6 hours: comment on the
+      # open one if there is one, otherwise open it.
+      - name: Report findings
+        if: steps.run.outputs.rc == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh label create cost-sentinel --color FBCA04 \
+            --description "Raised by the automated cost sentinel" --force >/dev/null 2>&1 || true
+
+          existing="$(gh issue list --label cost-sentinel --state open \
+            --json number --jq '.[0].number // empty')"
+
+          {
+            cat report.md
+            echo
+            echo "_[run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) • closes itself automatically once the account is clean._"
+          } >comment.md
+
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --body-file comment.md
+            echo "Commented on #${existing}"
+          else
+            gh issue create \
+              --title "Cost sentinel: chargeable resources found in ap-southeast-2" \
+              --label cost-sentinel \
+              --body-file comment.md
+          fi
+
+      # Closing on a clean run is what keeps the label meaningful — an issue
+      # that lingers after the destroy would train everyone to ignore it.
+      - name: Resolve when clean
+        if: steps.run.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for n in $(gh issue list --label cost-sentinel --state open --json number --jq '.[].number'); do
+            gh issue close "${n}" --reason completed \
+              --comment "Account is clean as of [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) — no chargeable resources found. Closing automatically."
+            echo "Closed #${n}"
+          done

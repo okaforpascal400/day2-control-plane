@@ -1,6 +1,6 @@
 # ROADMAP — day2-control-plane
 
-> Current phase: 1 — Claude Code: only work the current phase. Update checkboxes in
+> Current phase: 2 — Claude Code: only work the current phase. Update checkboxes in
 > the completing PR. Pascal approves phase transitions.
 
 ## Phase 0 — Environment
@@ -10,16 +10,22 @@
 - [x] Kind cluster up, hello-world pod running
 - [x] Repo scaffolded, CLAUDE.md + ROADMAP.md in place
 
-## Phase 1 — App + Pipeline  <-- CURRENT
+## Phase 1 — App + Pipeline
 - [x] FastAPI api (/health, /items, Postgres); worker; web dashboard
 - [x] Digest-pinned multi-stage Dockerfiles
 - [x] Helm chart deploys all + Postgres to Kind
 - [x] CI: ruff, pytest, build, SBOM, trivy, semgrep, GHCR; green on main
+- Known debt: [#3](https://github.com/okaforpascal400/day2-control-plane/issues/3)
+  api replicas race on `create_schema` (found during the Phase 2 cloud deploy)
 
-## Phase 2 — Cloud + IaC
-- [ ] State backend (S3+DynamoDB); VPC public subnet NO NAT; EC2 spot + k3s
-- [ ] Tag-triggered deploy; cost-sentinel workflow
-- [ ] Verified: terraform destroy leaves zero orphans
+## Phase 2 — Cloud + IaC  <-- CURRENT
+- [x] State backend (S3+DynamoDB); VPC public subnet NO NAT; EC2 spot + k3s
+- [x] Same chart on k3s via `values-aws.yaml` — GHCR digests, dashboard on Traefik :80
+- [x] Tag-triggered deploy — `release` job complete; `deploy` job inert pending
+      the runner-vs-security-group decision (see `infra/aws/README.md`)
+- [x] Cost-sentinel workflow — code-complete and verified against a live account;
+      goes live when the OIDC role is created (`infra/iam/README.md`)
+- [x] Verified: `terraform destroy` leaves zero orphans
 
 ## Phase 3 — Observability
 - [ ] kube-prometheus-stack + Loki; 2-3 dashboards; alert rules; load generator
@@ -53,3 +59,4 @@
 | DR | Terraform + S3 backups | DR Drill | 7 |
 | CVE speed | Scan/SBOM in CI + daily rescan | CVE Response | 5 |
 | Cadence | Quarterly audit action | Audit | 7 |
+| Cost drift | Read-only OIDC cost sentinel, every 6h | — | 2 |
