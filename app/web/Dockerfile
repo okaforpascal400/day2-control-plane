@@ -18,6 +18,15 @@ RUN test -s /payload/index.html && test -s /payload/app.js && test -s /payload/s
 
 FROM ${NGINX_IMAGE} AS runtime
 
+# Base-image lag, not app code: nginx-unprivileged:1.31-alpine still ships
+# libssl3/libcrypto3 3.5.7-r0, carrying a fixable HIGH (CVE-2026-14456, OpenSSL
+# QUIC DoS) that the trivy gate rejects. No rebuilt nginx-unprivileged alpine tag
+# carries the fix yet, so pull the patched 3.5.8-r0 straight from Alpine's 3.24
+# repo. This is a bridge: once upstream republishes with >=3.5.8-r0 it becomes a
+# no-op and should be replaced by a plain base-digest bump.
+USER root
+RUN apk add --no-cache --upgrade libssl3 libcrypto3
+
 # Upstream the /api/ location proxies to; overridden per environment by Helm.
 ENV API_UPSTREAM=http://day2-api:8000
 
