@@ -125,12 +125,25 @@ gh run watch
 
 ### Scope notes
 
+- **The `sub` claim carries GitHub's immutable IDs.** GitHub embeds the owner's
+  and repository's immutable numeric IDs in the default OIDC subject —
+  `repo:<owner>@<owner-id>/<repo>@<repo-id>:ref:refs/heads/main` — so that
+  deleting and recreating a repo or org under the same name yields a *different*
+  subject that cannot silently inherit this trust. `day2-cost-sentinel-trust.json`
+  therefore pins
+  `repo:okaforpascal400@171134881/day2-control-plane@1308639798:ref:refs/heads/main`,
+  not the name-only `repo:okaforpascal400/day2-control-plane:ref:refs/heads/main`;
+  the legacy form is rejected with `Not authorized to perform
+  sts:AssumeRoleWithWebIdentity`. The numeric IDs are public GitHub identifiers,
+  not secrets — only the AWS account ID stays an `<ACCOUNT_ID>` placeholder. Read
+  the current value with `gh api repos/<owner>/<repo> --jq .id` (repo) and
+  `gh api users/<owner> --jq .id` (owner).
 - **Trust is pinned to `refs/heads/main`.** A run from any branch — including
   the PR that introduces this workflow — cannot assume the role. That is the
   intended behaviour: the sentinel becomes live when the code reaches main. Do
   **not** loosen the `sub` claim to a wildcard such as
-  `repo:okaforpascal400/*`; that would hand every branch of every repo in the
-  account the same access and undo most of the reason OIDC was chosen.
+  `repo:okaforpascal400@171134881/*`; that would hand every branch of every repo
+  in the account the same access and undo most of the reason OIDC was chosen.
 - **Region-fenced to `ap-southeast-2`.** `day2-terraform` cannot create
   resources anywhere else, so anything this project produces is in that region.
   A resource created manually elsewhere would be invisible to the sentinel — to

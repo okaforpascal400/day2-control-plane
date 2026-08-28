@@ -67,18 +67,22 @@ One-time, by the account owner with admin credentials:
    `token.actions.githubusercontent.com`, audience `sts.amazonaws.com`.
 2. Create role `day2-cost-sentinel` with a trust policy that pins the subject
    to this repository, and to the workflow's own ref — a wildcard such as
-   `repo:okaforpascal400/*` would undo most of the benefit:
+   `repo:okaforpascal400@171134881/*` would undo most of the benefit:
 
    ```json
    {
      "Condition": {
        "StringEquals": {
          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-         "token.actions.githubusercontent.com:sub": "repo:okaforpascal400/day2-control-plane:ref:refs/heads/main"
+         "token.actions.githubusercontent.com:sub": "repo:okaforpascal400@171134881/day2-control-plane@1308639798:ref:refs/heads/main"
        }
      }
    }
    ```
+
+   The `@<id>` suffixes are GitHub's immutable owner/repository IDs, which it
+   embeds in the default OIDC subject; the name-only form is rejected. See
+   `infra/iam/README.md`.
 
 3. Attach a read-only policy — `infra/iam/day2-cost-sentinel-policy.json`.
 

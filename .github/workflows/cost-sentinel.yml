@@ -46,32 +46,6 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      # TEMPORARY diagnostic — remove once the OIDC assume is fixed (issue: OIDC
-      # "Not authorized to perform sts:AssumeRoleWithWebIdentity"). Mints the
-      # Actions OIDC token for the STS audience and prints ONLY the sub/aud/iss
-      # claims so they can be compared against the role's trust policy. The raw
-      # token and signature are never emitted (no `set -x`, JWT stays in a var).
-      - name: Debug OIDC claims (temporary)
-        run: |
-          set -euo pipefail
-          resp="$(curl -sS \
-            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")"
-          jwt="$(printf '%s' "$resp" | jq -r '.value // empty')"
-          if [ -z "$jwt" ]; then
-            echo "::error::could not obtain OIDC token (id-token permission or endpoint issue)"
-            exit 1
-          fi
-          # Decode ONLY the payload (2nd segment); the header and signature are
-          # never processed or printed.
-          payload="$(printf '%s' "$jwt" | cut -d. -f2 | tr '_-' '/+')"
-          case $(( ${#payload} % 4 )) in
-            2) payload="${payload}==" ;;
-            3) payload="${payload}=" ;;
-          esac
-          # Emit exactly three claims — nothing else from the token is printed.
-          printf '%s' "$payload" | base64 -d | jq '{sub, aud, iss}'
-
       - name: Assume the read-only sentinel role
         uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
