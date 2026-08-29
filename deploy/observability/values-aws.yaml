@@ -17,8 +17,8 @@
 #
 # NODE SIZING: the base tally is ~840Mi of observability requests on top of the
 # app's ~608Mi and k3s's own ~0.5–0.7Gi — which does not fit a t3.small (2Gi).
-# infra/aws/variables.tf already flags "bump to t3.medium before Phase 3 lands
-# the observability stack." The instance type is set in infra/aws (var.instance_type);
+# infra/aws/variables.tf therefore defaults var.instance_type to t3.medium (4 GiB);
+# the instance type is set in infra/aws, not here;
 # this file only sizes the workloads. See deploy/observability/README.md for the
 # measured footprint and the t3.small-vs-t3.medium decision.
 #
