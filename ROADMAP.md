@@ -1,8 +1,8 @@
 # ROADMAP — day2-control-plane
 
-> Phase 3 is complete. No current phase until Pascal opens Phase 4 — Claude Code:
-> only work the current phase. Update checkboxes in the completing PR. Pascal
-> approves phase transitions.
+> **CURRENT: Phase 4 — Agent Core + Triage Agent.** Claude Code: only work the
+> current phase. Update checkboxes in the completing PR. Pascal approves phase
+> transitions.
 
 ## Phase 0 — Environment
 - [x] WSL2 Ubuntu relocated to external SSD (`D:\wsl`)
@@ -39,10 +39,11 @@
       `terraform destroy` left zero orphans. 80 min, ~$0.03. See
       `deploy/observability/README.md`.
 
-## Phase 4 — Agent Core + Triage Agent (FLAGSHIP)
+## Phase 4 — Agent Core + Triage Agent (FLAGSHIP)  ⬅ CURRENT
 - [ ] agents/core: API client, audit logger, permission scopes, PR helper
 - [ ] Triage Agent: pipeline failure -> diagnosis -> fix PR
 - [ ] 3-4 seeded failure scenarios; audit log on every action
+- [ ] End-to-end demo run recorded with real per-triage cost
 
 ## Phase 5 — CVE Response + Upgrade Agents
 - [ ] Daily SBOM re-scan; CVE agent -> patch PR + blast radius
