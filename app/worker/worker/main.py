@@ -8,6 +8,7 @@ from day2_shared.db import make_engine, make_sessionmaker, wait_for_schema
 from day2_shared.logging import configure_logging
 from worker import __version__
 from worker.config import Settings, get_settings
+from worker.metrics import serve_metrics
 from worker.runner import run_forever, touch_heartbeat
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,9 @@ async def amain(settings: Settings | None = None) -> None:
 
     # Ready before the first poll, so the healthcheck does not flap on startup.
     touch_heartbeat(settings.heartbeat_path)
+    # /metrics up before we block on the schema wait, so Prometheus sees the
+    # worker throughout startup rather than only once it is polling.
+    serve_metrics(settings.metrics_port)
     logger.info("worker started", extra={"version": __version__})
     try:
         await wait_for_schema(

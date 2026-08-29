@@ -14,18 +14,29 @@ fullnameOverride: day2
 
 imagePullPolicy: IfNotPresent
 
+# The observability stack is installed on the node, so scrape the app's own
+# /metrics via ServiceMonitor + PodMonitor.
+monitoring:
+  enabled: true
+
 image:
   registry: ghcr.io
   repository: okaforpascal400/day2-control-plane
-  tag: "0.1.0"
+  tag: "0.2.0"
 
-# Digests for the 0.1.0 images published by the `ci` workflow from main
-# (commit ba4992687d13). The chart prefers a digest over a tag, so these are
-# what actually gets pulled — the tag above is left only as documentation of
-# which release the digests belong to.
+# Digests below are the 0.1.0 (pre-metrics) images. The chart prefers a digest
+# over a tag, so these are what actually gets pulled.
 #
-# Re-read them with:
-#   crane digest ghcr.io/okaforpascal400/day2-control-plane/api:0.1.0
+# ⚠️ REFRESH REQUIRED FOR 0.2.0: the api/worker images changed (they now serve
+# /metrics). These 0.1.0 digests have NO /metrics endpoint, so the app-overview
+# dashboard would stay empty on AWS. Once this PR merges and CI republishes the
+# 0.2.0 images, re-pin all three digests:
+#   crane digest ghcr.io/okaforpascal400/day2-control-plane/api:0.2.0
+#   crane digest ghcr.io/okaforpascal400/day2-control-plane/worker:0.2.0
+#   crane digest ghcr.io/okaforpascal400/day2-control-plane/web:0.2.0
+# (web is unchanged in content but re-tagged 0.2.0 by the same CI run.)
+# The pre-merge AWS verification side-loads the freshly built images into k3s's
+# containerd instead — see deploy/observability/README.md.
 api:
   # Two replicas on a single node is still worth doing: it proves the Service
   # load-balances and that a rolling update has somewhere to land.

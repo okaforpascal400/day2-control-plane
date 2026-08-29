@@ -18,15 +18,17 @@ variable "public_subnet_cidr" {
 
 variable "instance_type" {
   description = <<-EOT
-    EC2 instance type. Default t3.small = x86_64, 2 vCPU / 2 GiB, enough to run
-    k3s + the demo app comfortably. x86_64 rather than Graviton because the
-    images CI publishes to GHCR are single-arch linux/amd64; the arch here must
-    match the AMI filter in main.tf and the images the chart pulls. Spot pricing
-    in ap-southeast-2 makes this a wash (t3.small has been at or below t4g.small).
-    Bump to t3.medium (4 GiB) before Phase 3 lands the observability stack.
+    EC2 instance type. t3.medium = x86_64, 2 vCPU / 4 GiB. Phase 3's observability
+    stack (kube-prometheus-stack + Loki + promtail) measured ~1.2 GiB on its own;
+    with the app and k3s the node sits at ~2 GiB actual, which a t3.small (2 GiB,
+    ~1.8 GiB allocatable) cannot hold — see deploy/observability/README.md. Drop
+    back to t3.small only if the observability stack is not deployed.
+    x86_64 rather than Graviton because the images CI publishes to GHCR are
+    single-arch linux/amd64; the arch here must match the AMI filter in main.tf
+    and the images the chart pulls.
   EOT
   type        = string
-  default     = "t3.small"
+  default     = "t3.medium"
 }
 
 variable "root_volume_gb" {
