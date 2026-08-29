@@ -1,0 +1,130 @@
+# Triage Agent — a failed ci.yml run in, a reviewable proposal out.
+#
+# Fires on ci.yml completing with `failure` on any branch, reads that run's
+# jobs and logs, asks Claude for a diagnosis and a minimal fix, verifies the
+# fix with `git apply --check`, and opens a PR. If it is not confident, or the
+# patch does not apply, it posts the diagnosis as a commit comment and pushes
+# nothing. Full flow and governance mapping: agents/README.md.
+#
+# `workflow_run` is the only trigger that can see another workflow's logs, and
+# it deliberately runs from the *default branch's* copy of this file — so a PR
+# cannot change what the triage agent does until a human merges it. That is a
+# feature, and it is why the agent is also forbidden from editing `.github/`
+# (agents/core/guardrails.py): a proposal cannot alter the thing reviewing it.
+name: triage-agent
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  # Re-triage a specific run by hand — used for the Phase 4 demo and for
+  # re-running triage after a prompt change without breaking the build again.
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: The failed ci.yml run ID to triage
+        required: true
+
+# Least-privilege, and every line of it is load-bearing:
+#
+#   actions: read      — read the failed run's jobs and download its logs.
+#                        Read-only: the agent must not be able to cancel,
+#                        re-run, or delete a run, least of all the one that
+#                        caught it.
+#   contents: write    — create and push the `triage/*` branch, and post the
+#                        commit comment that links the outcome from the failing
+#                        commit. Branch protection on main is what keeps this
+#                        from being a push to main; `agents/core/guardrails.py`
+#                        refuses any ref outside `triage/*` before it gets that
+#                        far.
+#   pull-requests: write — open the PR. Note that this does NOT include merging:
+#                        merge permission is not a separate GitHub scope, so
+#                        the refusal lives in the library instead
+#                        (GitHubHelper.merge_pull_request always raises), and
+#                        required review on main is the platform-side backstop.
+#
+# Deliberately absent: `issues: write` (the diagnosis-only path uses a commit
+# comment, so no extra grant is needed), `packages`, `id-token`, `checks`,
+# `deployments`, `security-events`.
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+# One triage per failed run. Not cancel-in-progress: a half-finished triage
+# would leave a pushed branch with no PR explaining it.
+concurrency:
+  group: triage-${{ github.event.workflow_run.id || inputs.run_id }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  triage:
+    name: diagnose and propose
+    runs-on: ubuntu-24.04
+    # Only failures, and never a triage branch: a failing triage PR must not
+    # spawn triage of triage. The agent re-checks this itself (it is the kind
+    # of loop that costs money), but the cheapest place to stop it is here,
+    # before a runner is even allocated.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+       !startsWith(github.event.workflow_run.head_branch, 'triage/'))
+    timeout-minutes: 15
+
+    steps:
+      - name: Resolve the failed run
+        id: failed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run_id="${{ github.event.workflow_run.id || inputs.run_id }}"
+          echo "run_id=${run_id}" >>"$GITHUB_OUTPUT"
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .head_sha)"
+          echo "head_sha=${head_sha}" >>"$GITHUB_OUTPUT"
+          echo "Triaging run ${run_id} at ${head_sha}"
+
+      # The failing commit, not the default branch: a diff can only be verified
+      # against the tree that actually failed. Depth 2 so `git show <sha>` has
+      # the parent it needs to render the commit's own patch, which is the
+      # agent's most useful piece of evidence.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.failed.outputs.head_sha }}
+          fetch-depth: 2
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: agents/core/requirements.txt
+
+      - name: Install the agent
+        run: pip install -r agents/core/requirements.txt
+
+      - name: Triage
+        env:
+          # The only two credentials in play. Both are scoped, neither is
+          # written to disk (governance pillar 5).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TRIAGE_RUN_ID: ${{ steps.failed.outputs.run_id }}
+          # The audit trail is attached to *this* run; the PR links here.
+          TRIAGE_AUDIT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DAY2_AUDIT_LOG: ${{ github.workspace }}/triage-audit.jsonl
+          PYTHONPATH: ${{ github.workspace }}/agents/core:${{ github.workspace }}/agents/triage
+        run: python -m triage.agent
+
+      # Always: a run that failed part-way through still produced a trail, and
+      # that trail is the record of what it had already done.
+      - name: Upload audit trail
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: triage-audit-${{ steps.failed.outputs.run_id }}
+          path: triage-audit.jsonl
+          if-no-files-found: warn
+          retention-days: 90
