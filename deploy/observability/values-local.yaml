@@ -1,0 +1,26 @@
+# Kind overrides for the observability stack.
+#
+#   helm dependency build deploy/observability
+#   kubectl create namespace monitoring
+#   kubectl -n monitoring create secret generic grafana-admin \
+#     --from-literal=admin-user=admin \
+#     --from-literal=admin-password="$(openssl rand -base64 24)"
+#   helm upgrade --install obs deploy/observability -n monitoring \
+#     -f deploy/observability/values-local.yaml --wait
+#
+# The dev machine has RAM to spare, so the memory *limits* are loosened a little
+# to keep headroom while a load test hammers the app. The requests (what the
+# scheduler reserves) stay at the base so the footprint still reflects the node.
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      resources:
+        limits: { memory: 768Mi }
+  grafana:
+    resources:
+      limits: { memory: 384Mi }
+
+loki:
+  singleBinary:
+    resources:
+      limits: { memory: 384Mi }

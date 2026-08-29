@@ -33,6 +33,11 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            # Prometheus /metrics only — no application traffic. Scraped by the
+            # PodMonitor when monitoring.enabled (podmonitor-worker.yaml).
+            - name: metrics
+              containerPort: {{ .Values.worker.metricsPort }}
           env:
             {{- include "day2.postgresPasswordEnv" . | nindent 12 }}
             - name: DAY2_DATABASE_URL
@@ -51,6 +56,8 @@ spec:
               value: {{ .Values.worker.env.maxAttempts | quote }}
             - name: DAY2_HEARTBEAT_PATH
               value: /tmp/worker-heartbeat
+            - name: DAY2_METRICS_PORT
+              value: {{ .Values.worker.metricsPort | quote }}
           # No port to probe, so liveness is the poll-loop heartbeat: a process
           # that is up but has stopped polling is the failure worth catching.
           livenessProbe:

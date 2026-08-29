@@ -1,6 +1,6 @@
 # ROADMAP — day2-control-plane
 
-> Current phase: 2 — Claude Code: only work the current phase. Update checkboxes in
+> Current phase: 3 — Claude Code: only work the current phase. Update checkboxes in
 > the completing PR. Pascal approves phase transitions.
 
 ## Phase 0 — Environment
@@ -18,7 +18,7 @@
 - Known debt: [#3](https://github.com/okaforpascal400/day2-control-plane/issues/3)
   api replicas race on `create_schema` (found during the Phase 2 cloud deploy)
 
-## Phase 2 — Cloud + IaC  <-- CURRENT
+## Phase 2 — Cloud + IaC
 - [x] State backend (S3+DynamoDB); VPC public subnet NO NAT; EC2 spot + k3s
 - [x] Same chart on k3s via `values-aws.yaml` — GHCR digests, dashboard on Traefik :80
 - [x] Tag-triggered deploy — `release` job complete; `deploy` job inert pending
@@ -27,8 +27,14 @@
       goes live when the OIDC role is created (`infra/iam/README.md`)
 - [x] Verified: `terraform destroy` leaves zero orphans
 
-## Phase 3 — Observability
-- [ ] kube-prometheus-stack + Loki; 2-3 dashboards; alert rules; load generator
+## Phase 3 — Observability  <-- CURRENT
+- [x] kube-prometheus-stack + Loki; 2-3 dashboards; alert rules; load generator
+      (`deploy/observability`, app instrumented to 0.2.0) — verified on Kind under load
+- [x] Node sized for the stack: `t3.small` → `t3.medium` (measured ~2 GiB actual)
+- [ ] Cloud (k3s) deploy verification — **pending**. AWS infra + sizing proven live
+      (t3.medium applied, k3s up), but the app/obs deploy was blocked by an unstable
+      local IP. Plan of record: post-merge, the node pulls the 0.2.0 images from GHCR
+      (drift-tolerant), then a short apply→verify→destroy arc. Next session.
 
 ## Phase 4 — Agent Core + Triage Agent (FLAGSHIP)
 - [ ] agents/core: API client, audit logger, permission scopes, PR helper

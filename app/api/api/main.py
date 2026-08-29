@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from api import __version__
 from api.config import Settings, get_settings
@@ -55,6 +56,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(items.router)
     app.include_router(jobs.router)
+
+    # Prometheus /metrics: request rate, latency histogram, and status counts
+    # labelled by route handler. One instrumentator, no per-route edits — the
+    # probe/metrics endpoints are excluded so their high-frequency polling does
+    # not swamp the request metrics.
+    Instrumentator(
+        excluded_handlers=["/metrics", "/health", "/ready"],
+    ).instrument(app).expose(app, include_in_schema=False)
     return app
 
 

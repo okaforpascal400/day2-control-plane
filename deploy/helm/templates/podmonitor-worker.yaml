@@ -1,0 +1,20 @@
+{{- if .Values.monitoring.enabled }}
+# The worker has no Service (no inbound app traffic), so Prometheus scrapes its
+# pods directly on the metrics port. Gated on monitoring.enabled — the PodMonitor
+# CRD only exists where the observability stack is installed.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "day2.fullname" . }}-worker
+  labels:
+    {{- include "day2.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "day2.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.interval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+{{- end }}

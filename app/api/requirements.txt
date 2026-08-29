@@ -7,3 +7,6 @@ sqlalchemy==2.0.51
 asyncpg==0.31.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
+# /metrics for Prometheus (request rate/latency/errors). Pulls prometheus-client;
+# constrained to starlette <2 / >=1.0, satisfied by the fastapi pin above.
+prometheus-fastapi-instrumentator==8.1.0

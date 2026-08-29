@@ -26,3 +26,6 @@ dist/
 *.pem
 *.key
 .DS_Store
+
+# Vendored Helm subchart archives (pinned via Chart.lock; fetch with `helm dependency build`)
+deploy/observability/charts/

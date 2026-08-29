@@ -14,7 +14,7 @@ image:
   repository: okaforpascal400/day2-control-plane
   # Set per service below. A digest, when present, always wins over the tag so
   # deployments are immutable (CLAUDE.md rule 2).
-  tag: "0.1.0"
+  tag: "0.2.0"
 
 api:
   replicaCount: 2
@@ -37,6 +37,8 @@ api:
 
 worker:
   replicaCount: 1
+  # Port the worker serves Prometheus /metrics on (no application traffic).
+  metricsPort: 9000
   image:
     name: worker
     tag: ""
@@ -117,6 +119,15 @@ postgres:
       memory: 192Mi
     limits:
       memory: 512Mi
+
+# Prometheus scraping of the app's own metrics. OFF by default: the
+# ServiceMonitor/PodMonitor CRDs only exist where the observability stack
+# (deploy/observability) is installed, so values-local.yaml and values-aws.yaml
+# turn this on. Kind without the stack, and any bare `helm template`, stay clean.
+monitoring:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
 
 # Applied to every pod; overridable if a workload genuinely needs more.
 podSecurityContext:

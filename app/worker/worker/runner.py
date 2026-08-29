@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from day2_shared.db import session_scope
 from day2_shared.models import Job, JobStatus
 from worker.config import Settings
+from worker.metrics import JOB_PROCESSING_SECONDS, JOBS_PROCESSED, refresh_queue_depth
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ async def run_job(session: AsyncSession, job: Job, settings: Settings) -> JobSta
         exhausted = job.attempts >= settings.max_attempts
         job.status = JobStatus.failed if exhausted else JobStatus.pending
         job.finished_at = datetime.now(UTC) if exhausted else None
+        JOBS_PROCESSED.labels(result="failed" if exhausted else "retried").inc()
         logger.warning(
             "job failed",
             extra={
@@ -74,6 +76,7 @@ async def run_job(session: AsyncSession, job: Job, settings: Settings) -> JobSta
         job.status = JobStatus.completed
         job.finished_at = datetime.now(UTC)
         job.last_error = None
+        JOBS_PROCESSED.labels(result="completed").inc()
         logger.info(
             "job completed",
             extra={
@@ -82,6 +85,7 @@ async def run_job(session: AsyncSession, job: Job, settings: Settings) -> JobSta
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             },
         )
+    JOB_PROCESSING_SECONDS.observe(time.perf_counter() - started)
     await session.flush()
     return job.status
 
@@ -119,6 +123,9 @@ async def run_forever(
         try:
             handled = await process_batch(factory, settings)
             touch_heartbeat(settings.heartbeat_path)
+            # Refresh the queue-depth gauge every cycle so pending/processing
+            # counts on the dashboard track the database, not just what we claimed.
+            await refresh_queue_depth(factory)
         except Exception:
             handled = 0
             logger.exception("poll cycle failed")
