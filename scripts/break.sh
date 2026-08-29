@@ -56,6 +56,7 @@ Typical loop:
   git switch -c phase4/scenario-bad-dep
   scripts/break.sh bad-dep
   git commit -am 'test(triage): seed a bad-dep failure' && git push -u origin HEAD
+  gh pr create --fill   # ci.yml runs on pull_request; a push alone triggers nothing
   # ...CI fails, triage-agent.yml fires, a PR appears...
   scripts/break.sh restore && git commit -am 'test(triage): restore' && git push
 EOF

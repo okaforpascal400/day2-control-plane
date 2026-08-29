@@ -52,6 +52,8 @@ def test_auto_merge_and_approve_are_refused_too(full_scopes, audit, runner):
         ["gh", "pr", "merge", "--squash", "7"],
         ["gh", "pr", "create", "--auto"],
         ["gh", "pr", "merge", "--admin", "7"],
+        ["gh", "pr", "review", "--approve", "7"],
+        ["gh", "pr", "review", "7", "--approve"],
         ["git", "push", "--force", "origin", "triage/1"],
         ["git", "push", "-f", "origin", "triage/1"],
     ],
