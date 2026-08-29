@@ -121,21 +121,33 @@ lands the observability stack."* The instance type lives in `infra/aws`
 run 24/7 (~$17–19/mo) would exceed the ~$15 ceiling, the node stays **ephemeral**
 — brought up to verify, then destroyed.
 
-## AWS image delivery (0.2.0)
+## Cloud (k3s) deploy — status and plan of record
 
-The api/worker images changed (they now serve `/metrics`), so the `0.1.0` digests
-pinned in `deploy/helm/values-aws.yaml` predate the metrics. Two paths:
+The Kind path above is fully verified. The **AWS deploy is pending**: the infra
+and sizing are proven live (a `t3.medium` was applied, k3s came up, the api 0.2.0
+image loaded), but the app/observability deploy could not be completed because the
+operator's home IP kept drifting out of the least-privilege security group —
+breaking the multi-hundred-MB SSH image transfers mid-stream and interrupting
+`terraform apply` before it could re-scope the SG. The node was destroyed
+(zero orphans) rather than left idling.
 
-- **Steady state:** once this PR merges, CI republishes the `0.2.0` images; re-pin
-  the three digests in `values-aws.yaml` (see the note there).
-- **Pre-merge verification:** side-load the freshly built images straight into the
-  node's containerd, the cloud analogue of `kind load`:
+**Plan of record — drift-tolerant, no SSH image push:**
 
-  ```sh
-  for s in api worker web; do
-    docker save "day2/$s:0.2.0" | gzip | \
-      ssh ubuntu@<public-ip> "sudo k3s ctr images import -"
-  done
-  ```
+1. Merge this PR. CI republishes the `0.2.0` api/worker/web images to GHCR.
+2. Re-pin the three digests in `deploy/helm/values-aws.yaml` (see the note there).
+3. `apply → verify → destroy` in one short arc: the **node** pulls the images from
+   GHCR over its own egress (fast, not gated on the operator's IP), so only brief
+   `kubectl`/`helm`/port-forward calls over 6443 are needed — tolerant of an IP
+   that changes between commands. Install the observability release
+   (`values-aws.yaml`), deploy the app, run `scripts/loadgen.py` in-cluster, confirm
+   the dashboards render under load, then `terraform destroy`.
 
-  then deploy with the app image references pointed at those local tags.
+Fallback if pre-merge verification is ever needed: side-load the images into the
+node's containerd (the cloud analogue of `kind load`), which needs a stable link:
+
+```sh
+for s in api worker web; do
+  docker save "day2/$s:0.2.0" | gzip | \
+    ssh ubuntu@<public-ip> "gunzip | sudo k3s ctr images import -"
+done
+```
