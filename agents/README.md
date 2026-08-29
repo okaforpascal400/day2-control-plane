@@ -310,7 +310,7 @@ happy path has not tested anything.
 | # | Defect | Status |
 |---|---|---|
 | 1 | `get_job_log` returned `""` on any failure, discarding exit code and stderr both — so the agent diagnosed from the commit diff alone (`log_window_chars: 0`) at full model cost, and *why* the log was missing was unrecoverable | Fixed, [#13](https://github.com/okaforpascal400/day2-control-plane/pull/13) |
-| 2 | A failure at `gh pr create` raises out of `triage_run`, so the commit-comment fallback never runs — attempt 1 left a pushed branch, a paid-for diagnosis and no explanation anywhere a reviewer would look | **Open** |
+| 2 | A failure at `gh pr create` raises out of `triage_run`, so the commit-comment fallback never runs — attempt 1 left a pushed branch, a paid-for diagnosis and no explanation anywhere a reviewer would look | Fixed, [#17](https://github.com/okaforpascal400/day2-control-plane/pull/17) |
 | 3 | The agent's own audit log was committed into the proposal | Fixed, [#13](https://github.com/okaforpascal400/day2-control-plane/pull/13) |
 
 **Defect 3 in full**, because it is the one that bears directly on whether this
@@ -343,9 +343,12 @@ that fails identically on every run. The fallback is therefore not a fallback in
 practice; it is the transport that works. This is exactly the evidence defect 1's
 fix existed to capture, captured on the first run after it shipped.
 
-Defect 2 is left open deliberately rather than fixed here: it is a real gap, it
-is recorded rather than quietly carried, and the wrap-up PR is not the place to
-change agent behaviour.
+Defect 2 was left open through the wrap-up PR — a real gap, recorded rather
+than quietly carried — and closed straight after in [#17](https://github.com/okaforpascal400/day2-control-plane/pull/17):
+a `gh pr create` failure now degrades to a commit comment carrying the branch
+name and the command to finish the job by hand, while a guardrail violation at
+the same point stays fatal. The attempt-1 run above is the trail it was written
+from and is left as recorded.
 
 ### Scenario coverage, stated exactly
 
