@@ -58,7 +58,7 @@ variable "allowed_cidr" {
     (80/443). Lock this to your own /32 — do NOT use 0.0.0.0/0. Find yours with:
     curl -s https://checkip.amazonaws.com
   EOT
-  type = string
+  type        = string
 
   validation {
     condition     = var.allowed_cidr != "0.0.0.0/0"

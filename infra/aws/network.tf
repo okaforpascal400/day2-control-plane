@@ -59,10 +59,10 @@ resource "aws_security_group" "node" {
 
 locals {
   ingress_ports = {
-    ssh      = 22
-    k3s_api  = 6443
-    http     = 80
-    https    = 443
+    ssh     = 22
+    k3s_api = 6443
+    http    = 80
+    https   = 443
   }
 }
 
