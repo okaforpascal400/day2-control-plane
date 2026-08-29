@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import shlex
+import subprocess
+
 import pytest
 
 from day2_agents.claude import ClaudeClient, ModelError
 from day2_agents.github import GitHubHelper
+from day2_agents.guardrails import GuardrailViolation
 from tests.conftest import (
     REPO,
     RUN_ID,
@@ -156,6 +160,125 @@ def test_the_failing_commit_gets_a_comment_linking_the_pr(audit, scopes, git_rep
     comment = runner.comment_body(f"commits/{SHA}/comments")
     assert f"https://github.com/{REPO}/pull/11" in comment
     assert PR_MARKER in comment
+
+
+# ------------------------------------- the fix path when `gh pr create` fails
+
+
+def fail(stderr: str) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess([], 1, "", stderr)
+
+
+# The error the platform actually returned on the agent's first live run.
+PR_DENIED = (
+    "pull request create failed: GraphQL: GitHub Actions is not permitted "
+    "to create or approve pull requests (createPullRequest)"
+)
+
+
+def stranded_run(audit, scopes, git_repo, stderr: str = PR_DENIED):
+    """A run where everything works until `gh pr create`, which fails."""
+    runner = gh_runner(log=BAD_DEP_LOG)
+    ref = f"triage/{RUN_ID}-pin-httpx-to-a-version-that-exists"
+    runner.results["rev-parse --abbrev-ref"] = ok(ref + "\n")
+    runner.results["pr create"] = fail(stderr)
+    gh, claude = build(runner, diagnosis_payload(), audit, scopes, git_repo)
+    code = triage_run(gh, claude, audit, scopes, RUN_ID, REPO, str(git_repo), "a")
+    return runner, ref, code
+
+
+def test_a_pr_open_failure_still_comments_the_diagnosis(audit, scopes, git_repo):
+    """The defect: the diagnosis died with the exception and nothing said so."""
+    runner, ref, _ = stranded_run(audit, scopes, git_repo)
+
+    comment = runner.comment_body(f"commits/{SHA}/comments")
+    assert "could not be" in comment and "opened" in comment
+    # The reviewer gets the branch, the failure, and the diagnosis itself.
+    assert ref in comment
+    assert "GitHub Actions is not permitted" in comment
+    assert "The api dev requirements pin a version of httpx" in comment
+    assert "**Confidence: high**" in comment
+
+
+def test_the_stranded_comment_gives_the_command_that_finishes_the_job(
+    audit, scopes, git_repo
+):
+    runner, ref, _ = stranded_run(audit, scopes, git_repo)
+    comment = runner.comment_body(f"commits/{SHA}/comments")
+
+    assert f"gh pr create --head {ref} --base phase4/scenario-bad-dep" in comment
+    # Non-interactive: `gh pr create` without --body opens an editor prompt,
+    # which is not something a reviewer can paste out of a comment.
+    assert "--body" in comment and "--title" in comment
+    # And how to get rid of it, since the agent has no scope to delete a branch.
+    assert f"git push origin --delete {ref}" in comment
+
+
+def test_the_recovery_command_survives_a_summary_containing_a_quote(
+    audit, scopes, git_repo
+):
+    """The title comes from the model, so it is not assumed to be shell-safe."""
+    from triage.agent import build_stranded_block
+
+    block = build_stranded_block(
+        "triage/1-x",
+        "main",
+        "[triage] don't drop the operator's log",
+        "boom",
+        "https://run",
+        SHA,
+    )
+    quoted = shlex.split(block.split("--title ")[1].split(" \\")[0])
+    assert quoted == ["[triage] don't drop the operator's log"]
+
+
+def test_a_pr_open_failure_is_audited_as_its_own_action(audit, scopes, git_repo):
+    _, ref, _ = stranded_run(audit, scopes, git_repo)
+
+    actions = [e.action for e in audit.entries]
+    assert "open_pr_failed" in actions
+    # The trail records the outcome as distinct from a plain diagnosis, so a
+    # stranded branch is greppable rather than looking like a quiet no-fix run.
+    finish = next(e for e in audit.entries if e.action == "finish")
+    assert finish.metadata["outcome"] == "branch_without_pr"
+    assert finish.metadata["pr_url"] is None
+    failed = next(e for e in audit.entries if e.action == "open_pr_failed")
+    assert failed.metadata["ref"] == ref
+
+
+def test_a_pr_open_failure_makes_the_run_go_red(audit, scopes, git_repo):
+    """A stranded fix is not a success; the operator has to be told."""
+    _, _, code = stranded_run(audit, scopes, git_repo)
+    assert code == 1
+
+
+def test_the_fix_is_still_pushed_when_the_pr_cannot_be_opened(audit, scopes, git_repo):
+    """The commit is the work; losing it would be worse than losing the PR."""
+    runner, ref, _ = stranded_run(audit, scopes, git_repo)
+    assert runner.ran("push", "origin", f"{ref}:{ref}")
+    assert "fastapi==0.139.3" in (git_repo / "app/api/requirements.txt").read_text()
+
+
+def test_a_governance_refusal_opening_a_pr_stays_fatal(audit, scopes, git_repo):
+    """Platform failures degrade to a comment. Guardrail violations must not.
+
+    A refusal here means the agent tried something it must never do, and that
+    is a bug to be made loud — not an outcome to absorb into a tidy comment.
+    """
+    runner = gh_runner(log=BAD_DEP_LOG)
+    ref = f"triage/{RUN_ID}-pin-httpx-to-a-version-that-exists"
+    runner.results["rev-parse --abbrev-ref"] = ok(ref + "\n")
+    gh, claude = build(runner, diagnosis_payload(), audit, scopes, git_repo)
+
+    def refuse(*_a, **_k):
+        raise GuardrailViolation("refusing to open a PR from a protected ref")
+
+    gh.open_pull_request = refuse
+
+    with pytest.raises(GuardrailViolation):
+        triage_run(gh, claude, audit, scopes, RUN_ID, REPO, str(git_repo), "a")
+
+    assert "open_pr_failed" not in [e.action for e in audit.entries]
 
 
 # -------------------------------------------------------- the diagnosis path

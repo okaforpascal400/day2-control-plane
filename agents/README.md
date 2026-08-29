@@ -57,6 +57,15 @@ A confident-sounding wrong patch costs a reviewer more than silence, so anything
 short of a verified diff degrades to a comment. `low` confidence never produces
 a branch (`agent.py` → `FIX_CONFIDENCE`).
 
+There is a third state, and it is a failure rather than an ending: the diff is
+verified and pushed, and then `gh pr create` fails. The agent cannot open the PR
+and will not retry it, so it does the two things that keep the work reviewable —
+comments the diagnosis *and the branch name and the exact command to open the PR
+by hand* onto the failing commit, and exits non-zero so the run goes red — and
+leaves the rest to a human. Only a platform failure degrades this way; a
+guardrail violation at the same point stays fatal, because that would mean the
+agent tried something it must never do.
+
 ### What it will not do
 
 | | Where that is enforced |
