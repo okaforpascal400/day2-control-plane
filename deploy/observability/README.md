@@ -103,51 +103,78 @@ dashboards show life. See its header for local / cloud / in-cluster invocations.
 
 ## Resource footprint & node sizing
 
-Measured on Kind under load (`container_memory_working_set_bytes`):
+Measured on Kind under load, then **re-measured on the k3s node** during the
+2026-08-29 cloud arc (`max_over_time(container_memory_working_set_bytes[15m])`
+across the 10-minute load run):
 
-| Group | Working set |
+| Group | Kind (projected) | k3s node (measured) |
+|---|---|---|
+| observability (this release) | ~1.18 GiB | **949 MiB** |
+| app (api×2, worker, web, postgres) | ~0.30 GiB | **308 MiB** |
+| Grafana / Prometheus / Loki | ~300 / 273 / 228 MiB | **438 / 227 / 173 MiB** |
+
+Node totals under load: **2.40 GiB peak used of 3.75 GiB** allocatable, with
+**1.64 GiB / 0.890 cores** requested by the scheduler out of 3.75 GiB / 2 vCPU.
+The Kind projection over-estimated the stack by ~230 MiB; the real footprint is
+smaller, but the conclusion is unchanged and now measured rather than inferred:
+
+**A `t3.small` (2 GiB, ~1.8 GiB allocatable) does not fit this** — peak usage
+alone (2.40 GiB) exceeds a t3.small's entire RAM. `infra/aws/variables.tf`
+therefore defaults `var.instance_type` to **`t3.medium`** (4 GiB); the instance
+type lives in `infra/aws`, and this chart only sizes the workloads. Because a
+t3.medium run 24/7 (~$17–19/mo) would exceed the ~$15 ceiling, the node stays
+**ephemeral** — brought up to verify, then destroyed.
+
+## Cloud (k3s) deploy — verified 2026-08-29
+
+Both the Kind and the AWS paths are verified. The AWS arc ran
+`apply → deploy → load → verify → destroy` in **80 minutes for ~$0.03** (t3.medium
+spot at $0.0200–0.0203/hr in ap-southeast-2, plus a prorated 30 GiB gp3 root).
+
+The drift-tolerant approach worked as designed: the **node** pulled the `0.2.0`
+images from GHCR over its own egress, so the operator's link carried only short
+`kubectl`/`helm` calls over 6443 — no multi-hundred-MB SSH image transfer, and
+nothing that a mid-arc IP change could break. What was recorded:
+
+| Check | Result |
 |---|---|
-| observability (this release) | **~1.18 GiB** |
-| app (api×1, worker, web, postgres) | ~0.24 GiB |
-| Grafana / Prometheus / Loki (the three heaviest) | ~300 / 273 / 228 MiB |
+| Node | `t3.medium` spot, Ubuntu 22.04.5, k3s `v1.31.5+k3s1` |
+| Images | all three `0.2.0` GHCR digests, pulled by the node itself |
+| Pods | 5 app + 8 observability Ready, **0 restarts** |
+| Scrape targets | 3 day2 targets up (api ×2 + worker); 16/16 active targets healthy |
+| Load | 17,946 requests / 600 s at 30 rps — 17,452 2xx, 494 4xx, 0 connection errors |
+| API latency | p50 5.09 ms · p95 9.66 ms · p99 16.2 ms |
+| Job queue | peaked ~2,110 pending, drained at ~3.9 jobs/s |
+| Logs | Loki carried streams from api, worker, web and postgres |
+| Dashboards | all three imported into folder `day2`; every panel query returned data through Grafana's own datasource proxy |
+| Alerting | `JobQueueStuck` went inactive → pending → **firing**, reached Alertmanager, and resolved on recovery |
+| Teardown | `terraform destroy` removed all 13 resources; state empty and an API sweep matched the pre-apply baseline exactly |
 
-Projected onto the k3s node — observability **~1.18 GiB** + app **~0.30 GiB**
-(api runs 2 replicas on AWS) + k3s itself **~0.5 GiB** ≈ **~2.0 GiB actual**.
+**Install order matters.** `deploy/helm/values-aws.yaml` sets
+`monitoring.enabled: true`, so the app chart renders a `ServiceMonitor` and a
+`PodMonitor`. Those CRDs ship with *this* release, so install
+`deploy/observability` **first** — otherwise the app install aborts with
+`no matches for kind "ServiceMonitor" in version "monitoring.coreos.com/v1"`.
 
-**A `t3.small` (2 GiB, ~1.8 GiB allocatable) does not fit this.** `infra/aws/
-variables.tf` already anticipates it: *"Bump to t3.medium (4 GiB) before Phase 3
-lands the observability stack."* The instance type lives in `infra/aws`
-(`var.instance_type`); this chart only sizes the workloads. Because a t3.medium
-run 24/7 (~$17–19/mo) would exceed the ~$15 ceiling, the node stays **ephemeral**
-— brought up to verify, then destroyed.
+Two dashboard defects surfaced only under real load and were fixed in the same PR:
 
-## Cloud (k3s) deploy — status and plan of record
+- **Latency percentiles** queried `http_request_duration_seconds_bucket`, whose
+  `prometheus-fastapi-instrumentator` default buckets are `(0.1, 0.5, 1)`. The api
+  answers in 5–30 ms, so every observation landed in the first bucket and
+  `histogram_quantile` returned the constants 0.05 / 0.095 / 0.099 regardless of
+  actual latency. Now on `http_request_duration_highr_seconds_bucket` (21 buckets
+  from 0.01 s), which is the histogram the library documents for percentiles.
+- **The 5xx ratio panel** rendered "No data" instead of `0` on a healthy service,
+  because no `status="5xx"` series exists at all and an empty numerator makes the
+  whole expression empty. Wrapped as `(... or vector(0))`.
 
-The Kind path above is fully verified. The **AWS deploy is pending**: the infra
-and sizing are proven live (a `t3.medium` was applied, k3s came up, the api 0.2.0
-image loaded), but the app/observability deploy could not be completed because the
-operator's home IP kept drifting out of the least-privilege security group —
-breaking the multi-hundred-MB SSH image transfers mid-stream and interrupting
-`terraform apply` before it could re-scope the SG. The node was destroyed
-(zero orphans) rather than left idling.
+Alertmanager still uses a null receiver — the alerts and their firing path are the
+Phase 3 deliverable; wiring a real notifier is out of scope.
 
-**Plan of record — drift-tolerant, no SSH image push:**
-
-1. Merge this PR. CI republishes the `0.2.0` api/worker/web images to GHCR.
-2. Re-pin the three digests in `deploy/helm/values-aws.yaml` (see the note there).
-3. `apply → verify → destroy` in one short arc: the **node** pulls the images from
-   GHCR over its own egress (fast, not gated on the operator's IP), so only brief
-   `kubectl`/`helm`/port-forward calls over 6443 are needed — tolerant of an IP
-   that changes between commands. Install the observability release
-   (`values-aws.yaml`), deploy the app, run `scripts/loadgen.py` in-cluster, confirm
-   the dashboards render under load, then `terraform destroy`.
-
-Fallback if pre-merge verification is ever needed: side-load the images into the
-node's containerd (the cloud analogue of `kind load`), which needs a stable link:
-
-```sh
-for s in api worker web; do
-  docker save "day2/$s:0.2.0" | gzip | \
-    ssh ubuntu@<public-ip> "gunzip | sudo k3s ctr images import -"
-done
-```
+The alert was exercised by holding a Postgres row lock over the pending jobs
+(`SELECT ... FOR UPDATE` in an open transaction). The worker's
+`FOR UPDATE SKIP LOCKED` claim then returned nothing, so it stayed healthy and kept
+publishing an accurate queue-depth gauge while completions stopped — a faithful
+"long transaction starves the worker" incident. Note that simply scaling the worker
+to zero does **not** work: `day2_job_queue_depth` is a worker metric, so its series
+would disappear and the alert could never satisfy its own first condition.

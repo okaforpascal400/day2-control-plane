@@ -12,11 +12,29 @@ Local (Kind), against a port-forward:
 Cloud (k3s), through the Traefik ingress + nginx /api proxy:
     python3 scripts/loadgen.py --base-url http://<public-ip>/api --duration 300 --rps 25
 
-Or in-cluster with no port-forward (hits the Service directly):
-    kubectl -n default run loadgen --rm -it --restart=Never \
-      --image=python:3.12-slim --command -- \
-      python3 -c "$(cat scripts/loadgen.py)" \
-        --base-url http://day2-api:8000 --duration 300
+Or in-cluster as a detached Job (what the AWS verification arc uses). The image
+is the api digest already pinned in values-aws.yaml, so nothing unpinned is
+pulled and no attached stream can be lost if the operator's link drops:
+    kubectl -n default create configmap day2-loadgen --from-file=loadgen.py=scripts/loadgen.py
+    kubectl -n default create -f - <<'YAML'
+    apiVersion: batch/v1
+    kind: Job
+    metadata: {name: day2-loadgen}
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: loadgen
+              image: ghcr.io/okaforpascal400/day2-control-plane/api@sha256:<api digest>
+              command: ["python3", "/opt/loadgen/loadgen.py"]
+              args: ["--base-url", "http://day2-api:8000", "--duration", "600", "--rps", "30"]
+              volumeMounts: [{name: script, mountPath: /opt/loadgen, readOnly: true}]
+          volumes:
+            - {name: script, configMap: {name: day2-loadgen}}
+    YAML
+    kubectl -n default logs -f job/day2-loadgen
 
 The traffic mix mirrors what the web dashboard issues (stats/list polling plus
 item and job creation), at higher volume. Job creation deliberately outpaces the
