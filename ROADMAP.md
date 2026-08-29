@@ -1,7 +1,8 @@
 # ROADMAP — day2-control-plane
 
-> Current phase: 3 — Claude Code: only work the current phase. Update checkboxes in
-> the completing PR. Pascal approves phase transitions.
+> Phase 3 is complete. No current phase until Pascal opens Phase 4 — Claude Code:
+> only work the current phase. Update checkboxes in the completing PR. Pascal
+> approves phase transitions.
 
 ## Phase 0 — Environment
 - [x] WSL2 Ubuntu relocated to external SSD (`D:\wsl`)
@@ -27,14 +28,16 @@
       goes live when the OIDC role is created (`infra/iam/README.md`)
 - [x] Verified: `terraform destroy` leaves zero orphans
 
-## Phase 3 — Observability  <-- CURRENT
+## Phase 3 — Observability  ✅ COMPLETE
 - [x] kube-prometheus-stack + Loki; 2-3 dashboards; alert rules; load generator
       (`deploy/observability`, app instrumented to 0.2.0) — verified on Kind under load
 - [x] Node sized for the stack: `t3.small` → `t3.medium` (measured ~2 GiB actual)
-- [ ] Cloud (k3s) deploy verification — **pending**. AWS infra + sizing proven live
-      (t3.medium applied, k3s up), but the app/obs deploy was blocked by an unstable
-      local IP. Plan of record: post-merge, the node pulls the 0.2.0 images from GHCR
-      (drift-tolerant), then a short apply→verify→destroy arc. Next session.
+- [x] Cloud (k3s) deploy verified on a t3.medium spot node (2026-08-29) — 0.2.0
+      images pulled from GHCR by digest, observability then app releases installed,
+      3/3 scrape targets up, all three dashboards populated under `scripts/loadgen.py`
+      load (17,946 reqs / 600s), `JobQueueStuck` fired and reached Alertmanager, and
+      `terraform destroy` left zero orphans. 80 min, ~$0.03. See
+      `deploy/observability/README.md`.
 
 ## Phase 4 — Agent Core + Triage Agent (FLAGSHIP)
 - [ ] agents/core: API client, audit logger, permission scopes, PR helper
