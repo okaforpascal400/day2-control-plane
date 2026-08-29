@@ -15,6 +15,12 @@ The two outcomes are both first-class:
   not a failure path. Posting a wrong fix costs a reviewer more than posting no
   fix, so anything short of a verified patch degrades to a comment rather than
   guessing.
+
+There is a third, degraded state that is *not* first-class: the fix is verified
+and pushed but `gh pr create` fails. The agent cannot recover from that on its
+own, so it does the two things that keep the work reviewable — comments the
+diagnosis and the branch name onto the failing commit, and exits non-zero so the
+run goes red — and leaves the rest to a human.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -29,7 +36,7 @@ from typing import Any
 from day2_agents.audit import AuditLogger
 from day2_agents.claude import ClaudeClient, ModelError, parse_json_object
 from day2_agents.diffs import DiffRejected, apply_diff, validate_diff
-from day2_agents.github import GitHubHelper
+from day2_agents.github import GitHubError, GitHubHelper
 from day2_agents.scopes import Action, PermissionSet
 from triage import evidence, prompts
 
@@ -216,6 +223,41 @@ enrol itself into the pipeline. To see it go green, re-run CI on this branch
 """
 
 
+def build_stranded_block(
+    ref: str, base: str, title: str, failure: str, run_url: str, sha: str
+) -> str:
+    """The headline for a verified fix that is pushed but has no PR.
+
+    Everything the reviewer needs to finish the job by hand: what failed, where
+    the commit is, and the one command that turns it into a PR. The agent
+    cannot open the PR and will not retry it; a human can, in one line.
+
+    The command is deliberately non-interactive — `gh pr create` without
+    `--body` opens an editor prompt, which is not something you can paste out of
+    a comment. The body it supplies points back here rather than repeating the
+    diagnosis, so there is one copy of it and no chance of the two disagreeing.
+    """
+    body = (
+        f"Proposed by the triage agent for {run_url}. "
+        f"Diagnosis in the commit comment on {sha[:12]}.\n\n**{PR_MARKER}**"
+    )
+    return (
+        "**A verified fix is pushed, but the pull request could not be "
+        f"opened.** The patch below applies to the failing tree and is "
+        f"committed on `{ref}`, but `gh pr create` failed:\n\n"
+        f"> {failure}\n\n"
+        "Nothing is lost — the diagnosis is below and the commit is on that "
+        "branch. To turn it into a reviewable PR:\n\n"
+        "```bash\n"
+        f"gh pr create --head {ref} --base {base} \\\n"
+        f"  --title {shlex.quote(title)} \\\n"
+        f"  --body {shlex.quote(body)}\n"
+        "```\n\n"
+        f"If the fix is not wanted, delete the branch: `git push origin --delete {ref}`. "
+        "The agent has no scope to delete it."
+    )
+
+
 def build_comment_body(
     diagnosis: Diagnosis,
     run_url: str,
@@ -223,9 +265,12 @@ def build_comment_body(
     cost_usd: float,
     pr_url: str | None = None,
     rejection: str | None = None,
+    stranded: str | None = None,
 ) -> str:
     if pr_url:
         headline = f"Proposed a fix in {pr_url} — **{PR_MARKER}**"
+    elif stranded:
+        headline = stranded
     elif rejection:
         headline = (
             "**Diagnosis only — no fix proposed.** A patch was drafted but did "
@@ -392,48 +437,90 @@ def triage_run(
         )
 
     pr_url: str | None = None
+    stranded: str | None = None
     if diagnosis.proposes_fix and rejection is None:
         ref = f"triage/{run_id}-{slugify(diagnosis.summary)}"
+        title = f"[triage] {diagnosis.summary}"
         gh.create_branch(ref, sha)
         # The paths git actually patched — not `diagnosis.files_changed`, which
         # is the model's claim about them — are what the commit is scoped to.
         changed = apply_diff(diagnosis.diff, repo_root=repo_root)
         gh.commit_paths(ref, diagnosis.commit_message, changed)
         gh.push(ref)
-        pr_url = gh.open_pull_request(
-            head=ref,
-            base=branch,
-            title=f"[triage] {diagnosis.summary}",
-            body=build_pr_body(
-                diagnosis, run_url, audit_url, claude.total_cost_usd, scopes, ref
-            ),
-        )
-        print(f"Opened {pr_url}")
+        try:
+            pr_url = gh.open_pull_request(
+                head=ref,
+                base=branch,
+                title=title,
+                body=build_pr_body(
+                    diagnosis, run_url, audit_url, claude.total_cost_usd, scopes, ref
+                ),
+            )
+            print(f"Opened {pr_url}")
+        # Only `GitHubError` — the platform said no. A `GuardrailViolation`,
+        # `PermissionDenied` or `GitHubRefused` here would mean the agent tried
+        # something it must not, and that is a bug to be made loud, not an
+        # outcome to degrade gracefully into a comment. Those still propagate.
+        except GitHubError as exc:
+            # The commit is already pushed. Without this, the diagnosis dies
+            # with the exception and the branch is stranded with nothing
+            # anywhere explaining it — which is exactly what happened on the
+            # agent's first live run.
+            stranded = build_stranded_block(ref, branch, title, str(exc), run_url, sha)
+            audit.record(
+                action="open_pr_failed",
+                target=f"{repo}:{ref}",
+                decision_summary=(
+                    f"`gh pr create` failed: {exc}. The verified fix is pushed "
+                    f"on {ref}; falling back to a commit comment so the "
+                    "diagnosis and the branch are not lost."
+                ),
+                metadata={"ref": ref, "base": branch, "error": str(exc)},
+            )
+            print(f"Could not open a PR; the fix is stranded on {ref}", file=sys.stderr)
 
     if sha:
         gh.comment_on_commit(
             sha,
             build_comment_body(
-                diagnosis, run_url, audit_url, claude.total_cost_usd, pr_url, rejection
+                diagnosis,
+                run_url,
+                audit_url,
+                claude.total_cost_usd,
+                pr_url,
+                rejection,
+                stranded,
             ),
         )
+
+    if pr_url:
+        outcome, summary = "fix_pr", "fix PR opened"
+    elif stranded:
+        outcome, summary = "branch_without_pr", "fix pushed but no PR — needs a human"
+    else:
+        outcome, summary = "diagnosis_only", "diagnosis only"
 
     audit.record(
         action="finish",
         target=pr_url or run_url,
         decision_summary=(
-            f"triage complete: {'fix PR opened' if pr_url else 'diagnosis only'}, "
+            f"triage complete: {summary}, "
             f"{claude.call_count} model call(s), ${claude.total_cost_usd:.4f}"
         ),
         metadata={
-            "outcome": "fix_pr" if pr_url else "diagnosis_only",
+            "outcome": outcome,
             "pr_url": pr_url,
             "model_calls": claude.call_count,
             "total_cost_usd": round(claude.total_cost_usd, 6),
         },
     )
-    _write_step_summary(diagnosis, pr_url, run_url, claude.total_cost_usd, rejection)
-    return 0
+    _write_step_summary(
+        diagnosis, pr_url, run_url, claude.total_cost_usd, rejection, stranded
+    )
+    # Non-zero, so the job goes red and a human looks — but by returning rather
+    # than raising, because this is a handled outcome fully described by the
+    # trail above, not an unhandled error.
+    return 1 if stranded else 0
 
 
 def _write_step_summary(
@@ -442,11 +529,15 @@ def _write_step_summary(
     run_url: str,
     cost_usd: float,
     rejection: str | None,
+    stranded: str | None = None,
 ) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not path:
         return
     outcome = f"Fix PR: {pr_url}" if pr_url else "Diagnosis only (no fix pushed)"
+    if stranded:
+        outcome = "**Fix pushed, but no PR could be opened.** See the comment on "
+        outcome += "the failing commit; the branch needs a PR opened by hand."
     if rejection:
         outcome += f"\n\nPatch discarded: `{rejection}`"
     with open(path, "a", encoding="utf-8") as handle:
