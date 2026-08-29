@@ -1,0 +1,221 @@
+# Base values — shared by values-local.yaml (Kind) and values-aws.yaml (k3s).
+#
+# Sizing target is the SMALL end: a single 2 vCPU node. Every component carries
+# an explicit request AND memory limit so the total is auditable against the node
+# (see the tally at the bottom). Prometheus/Loki/Alertmanager use emptyDir, not a
+# PVC — retention is short (24–48h) and the cloud node is ephemeral, so on-disk
+# durability buys nothing here (real backups are Phase 7).
+
+# ===========================================================================
+# kube-prometheus-stack — Prometheus, Grafana, Alertmanager, exporters, operator
+# ===========================================================================
+kube-prometheus-stack:
+  crds:
+    enabled: true
+
+  # --- Control-plane scrape jobs: OFF ------------------------------------
+  # k3s bundles controller-manager/scheduler/proxy/etcd into one process that
+  # exposes no separate scrape endpoint, so these targets are permanently down
+  # there. Turning them off keeps the target list green on BOTH k3s and Kind
+  # with one set of values (and avoids the matching *Down alerts).
+  kubeControllerManager: { enabled: false }
+  kubeScheduler: { enabled: false }
+  kubeProxy: { enabled: false }
+  kubeEtcd: { enabled: false }
+
+  # Curated alerting only: the app's PrometheusRule (templates/prometheus-rules.yaml)
+  # carries exactly the alerts we want to demonstrate. The stack's ~100 default
+  # rules assume a full multi-node cluster and would drown the signal.
+  defaultRules:
+    create: false
+
+  alertmanager:
+    enabled: true
+    alertmanagerSpec:
+      replicas: 1
+      retention: 120h
+      resources:
+        requests: { cpu: 15m, memory: 48Mi }
+        limits: { memory: 96Mi }
+      # emptyDir (no storage block)
+    config:
+      route:
+        receiver: "null"
+        group_by: ["alertname", "namespace"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 3h
+      receivers:
+        - name: "null"
+
+  grafana:
+    enabled: true
+    replicas: 1
+    # Admin credential handled like the Postgres one: a Secret created out of band
+    # against the cluster, never in git (CLAUDE.md: secrets via env/SSM only).
+    #   kubectl -n monitoring create secret generic grafana-admin \
+    #     --from-literal=admin-user=admin \
+    #     --from-literal=admin-password="$(openssl rand -base64 24)"
+    admin:
+      existingSecret: grafana-admin
+      userKey: admin-user
+      passwordKey: admin-password
+    persistence:
+      enabled: false
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      # Grafana 13.x OOMs at 256Mi while the sidecar loads dashboards; 320 is the
+      # measured safe ceiling with the default dashboards OFF (below).
+      limits: { memory: 320Mi }
+    # OFF on purpose: the stack's ~30 bundled dashboards both cost Grafana memory
+    # and bury the signal. We ship three curated dashboards (app / cluster / node)
+    # as labelled ConfigMaps that the sidecar picks up.
+    defaultDashboardsEnabled: false
+    defaultDashboardsTimezone: browser
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: ALL
+        folderAnnotation: grafana_folder
+        provider:
+          foldersFromFilesStructure: true
+      datasources:
+        enabled: true
+    # Loki wired as a second datasource (Prometheus is provisioned automatically).
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki.monitoring.svc.cluster.local:3100
+        jsonData:
+          maxLines: 1000
+    grafana.ini:
+      analytics:
+        check_for_updates: false
+        reporting_enabled: false
+      log:
+        level: warn
+
+  prometheus:
+    prometheusSpec:
+      retention: 24h
+      # Bound the emptyDir so a runaway cardinality can't fill the node disk.
+      retentionSize: 1GB
+      scrapeInterval: 30s
+      evaluationInterval: 30s
+      walCompression: true
+      # Discover every ServiceMonitor/PodMonitor/PrometheusRule in the cluster,
+      # not only those labelled with this release — so the app's own monitors
+      # (deploy/helm, monitoring.enabled) are scraped without a label handshake.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+      probeSelectorNilUsesHelmValues: false
+      scrapeConfigSelectorNilUsesHelmValues: false
+      resources:
+        requests: { cpu: 100m, memory: 320Mi }
+        limits: { memory: 512Mi }
+
+  prometheusOperator:
+    resources:
+      requests: { cpu: 25m, memory: 64Mi }
+      limits: { memory: 128Mi }
+    prometheusConfigReloader:
+      resources:
+        requests: { cpu: 10m, memory: 24Mi }
+        limits: { memory: 48Mi }
+
+  kube-state-metrics:
+    resources:
+      requests: { cpu: 20m, memory: 48Mi }
+      limits: { memory: 96Mi }
+
+  prometheus-node-exporter:
+    resources:
+      requests: { cpu: 20m, memory: 32Mi }
+      limits: { memory: 64Mi }
+
+# ===========================================================================
+# Loki — single-binary, filesystem store, 48h retention. Everything scalable or
+# cache-related is switched off; the defaults assume a large multi-target cluster
+# and pull in memcached that alone wants gigabytes.
+# ===========================================================================
+loki:
+  fullnameOverride: loki
+  deploymentMode: SingleBinary
+  loki:
+    auth_enabled: false
+    commonConfig:
+      replication_factor: 1
+    storage:
+      type: filesystem
+    schemaConfig:
+      configs:
+        - from: "2024-04-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    limits_config:
+      retention_period: 48h
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+    compactor:
+      retention_enabled: true
+      delete_request_store: filesystem
+    # Quiet the readiness of an unused ruler/analytics on a demo box.
+    analytics:
+      reporting_enabled: false
+  singleBinary:
+    replicas: 1
+    # A writable volume at /var/loki is required (the container root FS is
+    # read-only). local-path scratch on both Kind and k3s — retention-bounded and
+    # ephemeral, so this is scratch, not durable storage (backups are Phase 7).
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: ""
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { memory: 256Mi }
+  # Zero out every distributed target and optional extra.
+  backend: { replicas: 0 }
+  read: { replicas: 0 }
+  write: { replicas: 0 }
+  gateway:
+    enabled: false
+  chunksCache:
+    enabled: false
+  resultsCache:
+    enabled: false
+  lokiCanary:
+    enabled: false
+  test:
+    enabled: false
+  minio:
+    enabled: false
+
+# ===========================================================================
+# promtail — one lightweight DaemonSet pod shipping all container logs to Loki.
+# ===========================================================================
+promtail:
+  fullnameOverride: promtail
+  resources:
+    requests: { cpu: 20m, memory: 48Mi }
+    limits: { memory: 96Mi }
+  config:
+    clients:
+      - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+
+# ---------------------------------------------------------------------------
+# Memory-request tally (what the scheduler reserves), single node:
+#   prometheus 320 + grafana 128 + alertmanager 48 + node-exporter 32
+#   + kube-state-metrics 48 + operator 64 + config-reloader 24
+#   + loki 128 + promtail 48                                  = ~840Mi
+# On top of the app chart (~608Mi) and k3s itself (~0.5–0.7Gi) this is the line
+# that decides t3.small (2Gi) vs t3.medium (4Gi) — see deploy/observability/README.md.
+# ---------------------------------------------------------------------------

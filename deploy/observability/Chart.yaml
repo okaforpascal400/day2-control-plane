@@ -1,0 +1,25 @@
+apiVersion: v2
+name: day2-observability
+description: >-
+  Observability layer for day2-control-plane — kube-prometheus-stack (Prometheus,
+  Grafana, Alertmanager, node-exporter, kube-state-metrics), Loki + promtail for
+  logs, plus curated dashboards and alert rules. Installed as its own release in
+  the `monitoring` namespace, separate from the app chart (deploy/helm).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+# Subcharts pinned by version (CLAUDE.md rule 2: no floating deps). Component
+# images inside these charts are pinned to tags by the chart itself; re-pin by
+# bumping the chart version deliberately, never by tracking a range.
+dependencies:
+  - name: kube-prometheus-stack
+    version: 88.6.1
+    repository: https://prometheus-community.github.io/helm-charts
+  - name: loki
+    version: 7.3.0
+    repository: https://grafana.github.io/helm-charts
+  - name: promtail
+    version: 6.17.1
+    repository: https://grafana.github.io/helm-charts
+maintainers:
+  - name: Pascal Okafor

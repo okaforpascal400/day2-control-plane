@@ -1,0 +1,36 @@
+# k3s-on-EC2 overrides for the observability stack.
+#
+#   export KUBECONFIG=./kubeconfig-day2
+#   helm dependency build deploy/observability
+#   kubectl create namespace monitoring
+#   kubectl -n monitoring create secret generic grafana-admin \
+#     --from-literal=admin-user=admin \
+#     --from-literal=admin-password="$(openssl rand -base64 24)"
+#   helm upgrade --install obs deploy/observability -n monitoring \
+#     -f deploy/observability/values-aws.yaml --wait
+#
+# Grafana is reached by port-forward over the k3s API (6443, already open to
+# allowed_cidr) — NOT a new NodePort or security-group rule:
+#   kubectl -n monitoring port-forward svc/obs-grafana 3000:80
+# then browse http://localhost:3000. This deliberately keeps Grafana off the
+# public internet; only the app dashboard (Traefik :80) is exposed.
+#
+# NODE SIZING: the base tally is ~840Mi of observability requests on top of the
+# app's ~608Mi and k3s's own ~0.5–0.7Gi — which does not fit a t3.small (2Gi).
+# infra/aws/variables.tf already flags "bump to t3.medium before Phase 3 lands
+# the observability stack." The instance type is set in infra/aws (var.instance_type);
+# this file only sizes the workloads. See deploy/observability/README.md for the
+# measured footprint and the t3.small-vs-t3.medium decision.
+#
+# Base sizing (values.yaml) is already tuned for a small node, so there is little
+# to override here. Retention is restated for visibility.
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      retention: 24h
+      retentionSize: 1GB
+
+loki:
+  loki:
+    limits_config:
+      retention_period: 48h

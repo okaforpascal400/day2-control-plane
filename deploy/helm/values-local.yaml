@@ -20,7 +20,12 @@ fullnameOverride: day2
 image:
   registry: ""
   repository: day2
-  tag: "0.1.0"
+  tag: "0.2.0"
+
+# The observability stack (deploy/observability) is installed on Kind, so scrape
+# the app's own /metrics via ServiceMonitor + PodMonitor.
+monitoring:
+  enabled: true
 
 api:
   # One replica keeps a single-node Kind cluster light; the chart supports more.
