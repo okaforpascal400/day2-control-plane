@@ -1,8 +1,8 @@
 # ROADMAP — day2-control-plane
 
-> **CURRENT: Phase 4 — Agent Core + Triage Agent.** Claude Code: only work the
+> **Phase 4 complete. No phase is currently open.** Claude Code: only work the
 > current phase. Update checkboxes in the completing PR. Pascal approves phase
-> transitions.
+> transitions — Phase 5 does not start until he says so.
 
 ## Phase 0 — Environment
 - [x] WSL2 Ubuntu relocated to external SSD (`D:\wsl`)
@@ -39,11 +39,28 @@
       `terraform destroy` left zero orphans. 80 min, ~$0.03. See
       `deploy/observability/README.md`.
 
-## Phase 4 — Agent Core + Triage Agent (FLAGSHIP)  ⬅ CURRENT
-- [ ] agents/core: API client, audit logger, permission scopes, PR helper
-- [ ] Triage Agent: pipeline failure -> diagnosis -> fix PR
-- [ ] 3-4 seeded failure scenarios; audit log on every action
-- [ ] End-to-end demo run recorded with real per-triage cost
+## Phase 4 — Agent Core + Triage Agent (FLAGSHIP)  ✅ COMPLETE
+- [x] agents/core: API client, audit logger, permission scopes, PR helper
+      (`agents/core/day2_agents`) — 112 tests, and the ones that matter assert
+      that it *refuses*: `main` unwritable, `.github/` diffs rejected whole,
+      merge/approve/auto-merge raising unconditionally
+- [x] Triage Agent: pipeline failure -> diagnosis -> fix PR
+      (`agents/triage`, `.github/workflows/triage-agent.yml`) — 55 tests
+- [x] 3-4 seeded failure scenarios; audit log on every action
+      Four scripted in `scripts/break.sh`, each failing at a different gate.
+      Two run live end to end (`bad-dep`, `fail-test`); `bad-env` and
+      `vuln-image` have their gates but no triage run yet — stated as such in
+      `agents/README.md` rather than counted as agent coverage.
+- [x] End-to-end demo run recorded with real per-triage cost
+      Costs read out of the audit artifacts, not estimated: `bad-dep`
+      **$0.0618** (PR #12), `fail-test` **$0.1181** (PR #15). A first `bad-dep`
+      attempt paid **$0.0684** and lost the diagnosis to defect 2, so the whole
+      demo cost **$0.2482** across three triage runs. `approved_by: null` on all
+      29 entries. Bundles are the 90-day `triage-audit-<failed-run-id>`
+      artifacts, addressed by triage run id (expire 2026-11-27). Three defects
+      found by running it — two fixed in PR #13, one (no commit-comment fallback
+      when `gh pr create` fails) recorded open. See the demo record in
+      `agents/README.md`.
 
 ## Phase 5 — CVE Response + Upgrade Agents
 - [ ] Daily SBOM re-scan; CVE agent -> patch PR + blast radius
