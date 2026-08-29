@@ -14,7 +14,7 @@ that runs on Kind locally. State lives in the S3 backend from
 | Route table | default route `0.0.0.0/0` → IGW |
 | Security group | ingress 22 / 6443 / 80 / 443 from `allowed_cidr` only; egress all |
 | Key pair | your public key; private half never leaves your machine |
-| Spot EC2 (`t3.small`, x86_64) | Ubuntu 22.04, gp3 30 GiB encrypted, IMDSv2, k3s via cloud-init |
+| Spot EC2 (`t3.medium`, x86_64) | Ubuntu 22.04, gp3 30 GiB encrypted, IMDSv2, k3s via cloud-init |
 
 **Why x86_64 and not Graviton?** The images CI publishes to GHCR are single-arch
 `linux/amd64` (plain `docker build` on an `ubuntu-24.04` runner). An arm64 node
@@ -114,19 +114,20 @@ cost-sentinel auth proposal, which turns on the same question.
 
 ## Cost
 
-Spot `t3.small` in ap-southeast-2, quoted by `describe-spot-price-history` on
-2026-07-23: **$0.0099–0.0112/hr** across the three AZs — ~**$7–8/mo** if left
-running 24/7. Add gp3 30 GiB at list (~$0.096/GiB-mo) ≈ **$2.9/mo**, for roughly
-**$10–11/mo continuous**.
+Phase 3 moved the node to **`t3.medium`** (4 GiB) — the observability stack does
+not fit a t3.small (see `deploy/observability/README.md`). t3.medium is roughly
+**2× the vCPU-hour** of the t3.small measured on 2026-07-23 ($0.0099–0.0112/hr),
+so estimate **~$0.02/hr spot ≈ ~$14–16/mo** if left 24/7, plus gp3 30 GiB
+(~$2.9/mo) ≈ **~$17–19/mo continuous** (estimate — re-verify, see below).
 
-That fits the ~$15/mo ceiling only if nothing else is running, so **destroy it
-when idle** — this stack is meant to be ephemeral, and the numbers above assume
-a 24/7 node that should not exist. Spot prices move; re-check rather than trust
-this line:
+That is **over** the ~$15/mo ceiling, so this stack must **not** run 24/7: it is
+ephemeral by design — bring it up to verify, then `terraform destroy`. The spot
+request has no `max_price`, so it is capped at the on-demand rate (~$0.052/hr) and
+a short verification run costs cents regardless. Spot prices move; re-check:
 
 ```
 aws ec2 describe-spot-price-history --region ap-southeast-2 \
-  --instance-types t3.small --product-descriptions Linux/UNIX --max-items 3
+  --instance-types t3.medium --product-descriptions Linux/UNIX --max-items 3
 ```
 
 ## Destroy (rule 6: zero orphans)
