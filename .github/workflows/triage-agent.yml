@@ -114,7 +114,13 @@ jobs:
           TRIAGE_RUN_ID: ${{ steps.failed.outputs.run_id }}
           # The audit trail is attached to *this* run; the PR links here.
           TRIAGE_AUDIT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          DAY2_AUDIT_LOG: ${{ github.workspace }}/triage-audit.jsonl
+          # Outside the workspace on purpose. The trail is an artifact of the
+          # run, not a file in the repo, and writing it into the checkout put
+          # it in front of the agent's own `git add` — the first fix PR the
+          # agent opened carried its own audit log as a second changed file.
+          # The commit is path-scoped now too; this is the other half, so the
+          # stray file is never in the tree to be staged in the first place.
+          DAY2_AUDIT_LOG: ${{ runner.temp }}/triage-audit.jsonl
           PYTHONPATH: ${{ github.workspace }}/agents/core:${{ github.workspace }}/agents/triage
         run: python -m triage.agent
 
@@ -125,6 +131,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: triage-audit-${{ steps.failed.outputs.run_id }}
-          path: triage-audit.jsonl
+          path: ${{ runner.temp }}/triage-audit.jsonl
           if-no-files-found: warn
           retention-days: 90

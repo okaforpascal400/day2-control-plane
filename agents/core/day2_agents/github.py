@@ -27,7 +27,11 @@ from collections.abc import Callable, Sequence
 from typing import Any, NoReturn
 
 from day2_agents.audit import AuditLogger
-from day2_agents.guardrails import GuardrailViolation, assert_writable_ref
+from day2_agents.guardrails import (
+    GuardrailViolation,
+    assert_paths_allowed,
+    assert_writable_ref,
+)
 from day2_agents.scopes import Action, PermissionSet
 
 Runner = Callable[[Sequence[str], str | None, str], subprocess.CompletedProcess]
@@ -135,14 +139,63 @@ class GitHubHelper:
         return list(payload.get("jobs", []))
 
     def get_job_log(self, job_id: str | int) -> str:
-        """Raw log for one job. Returns "" if the log has already expired."""
+        """Raw log for one job, over two independent transports.
+
+        On run 33257066844 this returned nothing and said nothing: the window
+        was 0 chars, the agent diagnosed the failure from the commit diff alone,
+        and it opened a PR. Why the fetch came back empty is not recoverable,
+        and that is the first defect — the old body was `return result.stdout
+        or ""`, which discards the exit code and stderr both, so a log that
+        never arrived is indistinguishable from one that expired. The evidence
+        needed to explain it was thrown away at the moment it existed.
+
+        So: every attempt now records its exit code, byte count and stderr, and
+        an empty result is an audited event rather than a silent "". The
+        `api` transport is the documented endpoint and answers with a 302 to a
+        blob store — the redirect is the obvious suspect, but it is a suspect,
+        not a finding. `gh run view` reads the same bytes out of the run-level
+        log archive over a different code path, so it is a genuine second
+        chance rather than a retry of whatever just failed.
+        """
         self._scopes.require(Action.READ_CI_RUN)
-        result = self._runner(
-            ["gh", "api", f"repos/{self.repo}/actions/jobs/{job_id}/logs"],
-            None,
-            self.repo_root,
+        transports: tuple[tuple[str, list[str]], ...] = (
+            ("api", ["gh", "api", f"repos/{self.repo}/actions/jobs/{job_id}/logs"]),
+            (
+                "run-view",
+                ["gh", "run", "view", "--repo", self.repo, "--job", str(job_id), "--log"],
+            ),
         )
-        return result.stdout or ""
+
+        attempts: list[str] = []
+        for name, argv in transports:
+            _assert_argv_allowed(argv)
+            result = self._runner(argv, None, self.repo_root)
+            text = result.stdout or ""
+            if result.returncode == 0 and text.strip():
+                if attempts:
+                    self._audit.record(
+                        action="read_job_log",
+                        target=f"{self.repo}/actions/jobs/{job_id}",
+                        decision_summary=(
+                            f"primary log transport failed, {name!r} succeeded "
+                            f"with {len(text)} chars — {'; '.join(attempts)}"
+                        ),
+                    )
+                return text
+            attempts.append(
+                f"{name}: exit {result.returncode}, {len(text)} chars, "
+                f"stderr={(result.stderr or '').strip()[:200]!r}"
+            )
+
+        self._audit.record(
+            action="log_unavailable",
+            target=f"{self.repo}/actions/jobs/{job_id}",
+            decision_summary=(
+                "no job log could be retrieved by any transport; the diagnosis "
+                f"that follows was made without it — {'; '.join(attempts)}"
+            ),
+        )
+        return ""
 
     # ------------------------------------------------------------------ writes
 
@@ -157,22 +210,62 @@ class GitHubHelper:
         )
         return ref
 
-    def commit_all(self, ref: str, message: str) -> str:
-        """Stage the working tree and commit. `ref` is re-checked, not trusted."""
+    def commit_paths(self, ref: str, message: str, paths: Sequence[str]) -> str:
+        """Commit exactly `paths` and nothing else. `ref` is re-checked, not trusted.
+
+        `paths` must be the list `apply_diff` returned — the paths git actually
+        patched — not the model's `files_changed`, which is a claim.
+
+        This used to be `git add -A`, which commits whatever is in the working
+        tree. On a runner that tree is not just the checkout: the agent's own
+        audit log was being written into the workspace, so the first fix PR the
+        agent opened carried `triage-audit.jsonl` alongside the one-line
+        dependency fix it was proposing. A reviewer reading that diff cannot
+        tell the proposal from the agent's exhaust, which defeats the point of
+        proposing a diff for review at all.
+
+        So the pathspec is explicit and then checked twice: the paths go through
+        the same guardrail the diff did, and the index is compared against them
+        after staging, so anything that arrives by another route fails the
+        commit rather than riding along in it.
+        """
         self._scopes.require(Action.PUSH_COMMIT)
         assert_writable_ref(ref)
+        if not paths:
+            raise GuardrailViolation("refusing to commit an empty pathspec")
+        # The paths were permitted as diff targets; they are re-checked here
+        # because this is the call that writes them into history.
+        assert_paths_allowed(list(paths))
+
         current = self._git("rev-parse", "--abbrev-ref", "HEAD").strip()
         if current != ref:
             raise GuardrailViolation(
                 f"refusing to commit: on {current!r}, expected {ref!r}"
             )
-        self._git("add", "-A")
-        self._git("commit", "-m", message)
+
+        self._git("add", "--", *paths)
+        staged = {
+            line
+            for line in self._git("diff", "--cached", "--name-only").splitlines()
+            if line
+        }
+        unexpected = sorted(staged - set(paths))
+        if unexpected:
+            raise GuardrailViolation(
+                f"refusing to commit: {len(unexpected)} path(s) staged that the "
+                f"diff did not touch: {', '.join(unexpected[:10])}"
+            )
+
+        # `-- <paths>` again, so even a pre-populated index cannot widen this.
+        self._git("commit", "-m", message, "--", *paths)
         sha = self._git("rev-parse", "HEAD").strip()
         self._audit.record(
             action="commit",
             target=f"{self.repo}@{ref}#{sha[:12]}",
-            decision_summary=message.splitlines()[0],
+            decision_summary=(
+                f"{message.splitlines()[0]} [{len(paths)} path(s): {', '.join(paths)}]"
+            ),
+            metadata={"paths": list(paths)},
         )
         return sha
 
