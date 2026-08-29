@@ -58,8 +58,8 @@
       demo cost **$0.2482** across three triage runs. `approved_by: null` on all
       29 entries. Bundles are the 90-day `triage-audit-<failed-run-id>`
       artifacts, addressed by triage run id (expire 2026-11-27). Three defects
-      found by running it — two fixed in PR #13, one (no commit-comment fallback
-      when `gh pr create` fails) recorded open. See the demo record in
+      found by running it — two fixed in PR #13, the third (no commit-comment
+      fallback when `gh pr create` fails) in PR #17. See the demo record in
       `agents/README.md`.
 
 ## Phase 5 — CVE Response + Upgrade Agents
