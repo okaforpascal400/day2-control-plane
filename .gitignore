@@ -29,3 +29,6 @@ dist/
 
 # Vendored Helm subchart archives (pinned via Chart.lock; fetch with `helm dependency build`)
 deploy/observability/charts/
+
+# Originals stashed by scripts/break.sh while a failure scenario is seeded.
+.break-backup/
