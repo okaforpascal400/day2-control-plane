@@ -24,19 +24,15 @@ image:
   repository: okaforpascal400/day2-control-plane
   tag: "0.2.0"
 
-# Digests below are the 0.1.0 (pre-metrics) images. The chart prefers a digest
-# over a tag, so these are what actually gets pulled.
+# Digests are the 0.2.0 images CI published from the Phase 3 merge commit
+# 5b17da1 (run 33244997256, built 2026-08-29T09:14Z). The chart prefers a digest
+# over a tag, so these are what actually gets pulled — the tag above is
+# documentation. Verified: for all three services the `0.2.0` tag and the
+# `sha-5b17da1bdffa` tag resolve to the same digest, and every image is
+# linux/amd64 (the node is x86_64 — see infra/aws/README.md).
 #
-# ⚠️ REFRESH REQUIRED FOR 0.2.0: the api/worker images changed (they now serve
-# /metrics). These 0.1.0 digests have NO /metrics endpoint, so the app-overview
-# dashboard would stay empty on AWS. Once this PR merges and CI republishes the
-# 0.2.0 images, re-pin all three digests:
-#   crane digest ghcr.io/okaforpascal400/day2-control-plane/api:0.2.0
-#   crane digest ghcr.io/okaforpascal400/day2-control-plane/worker:0.2.0
-#   crane digest ghcr.io/okaforpascal400/day2-control-plane/web:0.2.0
-# (web is unchanged in content but re-tagged 0.2.0 by the same CI run.)
-# The pre-merge AWS verification side-loads the freshly built images into k3s's
-# containerd instead — see deploy/observability/README.md.
+# Re-pin after any main push that rebuilds them:
+#   crane digest ghcr.io/okaforpascal400/day2-control-plane/<svc>:<version>
 api:
   # Two replicas on a single node is still worth doing: it proves the Service
   # load-balances and that a rolling update has somewhere to land.
@@ -54,17 +50,17 @@ api:
   # app-layer work and belongs to a later phase, not to Phase 2's IaC scope.
   replicaCount: 2
   image:
-    digest: "sha256:90304f62f56c02894408fc75f7583c634e371795dfe482f69eb9c0a845b18c3a"
+    digest: "sha256:c030a131b3083a9f76b8d0ae724d059d9452e0afdab583415a8302b259797d6b"
 
 worker:
   replicaCount: 1
   image:
-    digest: "sha256:0d6feb95f897b8c8d6a1959fa7878c7323b467e3a4569aeddf24b4be56b2f601"
+    digest: "sha256:1505fc2ed379824cd65bd0167b297592fa7b87fb633e8ac8b08169aceb466578"
 
 web:
   replicaCount: 1
   image:
-    digest: "sha256:7b5b643225e45f184bee845c38e570d50e0769cbe7dfb9be8a2622043efbfe93"
+    digest: "sha256:830a86d9d83ac8405c68a72ad51cb9a1f34616b58586a0badbede8413da9a47c"
 
 # k3s bundles Traefik and binds it to host ports 80/443 — the only app ports the
 # node security group lets through (NodePorts, at 30000+, are firewalled off).
@@ -98,6 +94,8 @@ postgres:
     # storage. Backups are Phase 7.
     size: 2Gi
 
-# t3.small is 2 vCPU / 2 GiB and k3s itself wants a chunk of that. These are the
-# chart defaults, restated here so the total is easy to check against the node:
-# 270m CPU / 608Mi memory requested across all six pods.
+# The node is a t3.medium (2 vCPU / 4 GiB) and k3s itself wants a chunk of that.
+# These are the chart defaults, restated here so the total is easy to check
+# against the node: 270m CPU / 608Mi memory requested across all five pods
+# (api x2, worker, web, postgres). The observability release adds ~310m / ~840Mi
+# on top — see deploy/observability/README.md for the measured footprint.

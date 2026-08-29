@@ -81,6 +81,12 @@ kubectl create secret generic day2-postgres-auth \
 helm upgrade --install day2 deploy/helm -f deploy/helm/values-aws.yaml --wait
 ```
 
+**Order matters.** `values-aws.yaml` sets `monitoring.enabled: true`, so the chart
+renders a `ServiceMonitor` and a `PodMonitor`. Those CRDs ship with the
+observability release, not with this chart — install `deploy/observability`
+**first** or the app install aborts with `no matches for kind "ServiceMonitor" in
+version "monitoring.coreos.com/v1"`. See `deploy/observability/README.md`.
+
 The dashboard is then served by k3s's bundled Traefik on port 80 — one of the
 four ports the security group opens to `allowed_cidr`:
 
