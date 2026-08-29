@@ -50,7 +50,9 @@ def _request(
     if data is not None:
         req.add_header("content-type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # The URL is the operator-supplied --base-url (their own load target),
+        # scheme-restricted to http(s) in main() — not untrusted input.
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosemgrep
             payload = resp.read()
             return resp.status, payload
     except urllib.error.HTTPError as exc:
@@ -113,6 +115,8 @@ def main() -> int:
     args = parser.parse_args()
 
     base = args.base_url.rstrip("/")
+    if not base.startswith(("http://", "https://")):
+        parser.error("--base-url must be an http:// or https:// URL")
     interval = 1.0 / args.rps if args.rps > 0 else 0.0
     deadline = time.monotonic() + args.duration
     next_report = time.monotonic() + 10.0
