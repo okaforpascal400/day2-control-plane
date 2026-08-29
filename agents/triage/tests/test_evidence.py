@@ -18,10 +18,52 @@ LOG = "\n".join(
 )
 
 
+# The same three lines as `gh run view --log` renders them: every line carries
+# a "<job>\t<step>\t" prefix, and the first one a UTF-8 BOM. The failure window
+# has to survive both shapes, because the log has two transports and either may
+# be the one that answered (see `GitHubHelper.get_job_log`).
+BOM = "\ufeff"
+RUN_VIEW_LOG = "\n".join(
+    "pytest (api)\tInstall dependencies\t" + (BOM if i == 0 else "") + line
+    for i, line in enumerate(LOG.splitlines())
+)
+
+
 def test_timestamps_and_group_chrome_are_stripped():
     lines = evidence.clean_log_lines(LOG)
     assert not any(line.startswith("2026-08-29T") for line in lines)
     assert not any(line.startswith("##[group]") for line in lines)
+
+
+def test_the_run_view_line_prefix_and_bom_are_stripped_too():
+    lines = evidence.clean_log_lines(RUN_VIEW_LOG)
+    assert not any("\t" in line for line in lines)
+    assert not any(line.startswith("\ufeff") for line in lines)
+    assert not any(line.startswith("##[group]") for line in lines)
+    # Identical output from both transports: the caller never has to know which
+    # one answered.
+    assert lines == evidence.clean_log_lines(LOG)
+
+
+def test_the_window_survives_the_run_view_format():
+    """A fallback log must cost nothing in prompt quality.
+
+    Unstripped, the prefix repeats the job and step name on every one of the
+    200 lines in the window — a third of the log budget spent restating two
+    facts the prompt already states once, and the char cap then truncates real
+    evidence to make room for it.
+    """
+    window = evidence.extract_failure_window(RUN_VIEW_LOG)
+    assert "Could not find a version" in window
+    assert "##[error]" in window
+    assert "Install dependencies\t" not in window
+    assert window == evidence.extract_failure_window(LOG)
+
+
+def test_a_tab_inside_a_real_log_line_is_left_alone():
+    """The prefix is only stripped when a timestamp follows it."""
+    lines = evidence.clean_log_lines("make:\tTarget\tfoo is up to date")
+    assert lines == ["make:\tTarget\tfoo is up to date"]
 
 
 def test_window_is_anchored_on_the_error_and_keeps_the_cause():

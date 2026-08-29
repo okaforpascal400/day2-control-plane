@@ -29,7 +29,19 @@ from typing import Any
 
 # GitHub prefixes every log line with an RFC3339 timestamp. It carries no
 # diagnostic value once the window is chosen and costs ~29 characters a line.
-TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s?")
+#
+# Two shapes reach us, because the log has two transports (see
+# `GitHubHelper.get_job_log`). The API endpoint yields the timestamp alone,
+# with a UTF-8 BOM on the very first line; `gh run view --log` prefixes every
+# line with "<job>\t<step>\t" as well. Both are stripped here so the caller
+# never has to know which transport won.
+#
+# The timestamp is mandatory in the pattern and the prefix optional, which is
+# what keeps this safe: the prefix group can only ever match when a timestamp
+# follows it, so a tab inside a genuine log line is left alone.
+TIMESTAMP = re.compile(
+    r"^(?:[^\t]*\t[^\t]*\t)?\ufeff?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s?"
+)
 ERROR_MARKER = "##[error]"
 GROUP_MARKER = re.compile(r"^##\[(group|endgroup|debug)\]")
 
