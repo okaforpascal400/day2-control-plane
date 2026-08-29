@@ -41,6 +41,7 @@ Runner = Callable[[Sequence[str], str | None, str], subprocess.CompletedProcess]
 # a delay, and a force-push over a protected ref is a merge with extra steps).
 FORBIDDEN_ARGV_FRAGMENTS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("pr", "merge"), "merging is a human decision (CLAUDE.md rule 3)"),
+    (("pr", "review"), "approving is a human decision (CLAUDE.md rule 3)"),
     (("--auto",), "auto-merge is a deferred merge"),
     (("--admin",), "admin override bypasses required review"),
     (("--force",), "agents never rewrite published history"),
