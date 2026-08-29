@@ -32,3 +32,8 @@ deploy/observability/charts/
 
 # Originals stashed by scripts/break.sh while a failure scenario is seeded.
 .break-backup/
+
+# Agent audit trails. Written outside the workspace on a runner and uploaded as
+# a run artifact (see .github/workflows/triage-agent.yml); this catches a local
+# run that defaults the path into the repo.
+*audit.jsonl

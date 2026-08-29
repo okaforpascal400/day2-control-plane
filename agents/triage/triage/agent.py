@@ -395,8 +395,10 @@ def triage_run(
     if diagnosis.proposes_fix and rejection is None:
         ref = f"triage/{run_id}-{slugify(diagnosis.summary)}"
         gh.create_branch(ref, sha)
-        apply_diff(diagnosis.diff, repo_root=repo_root)
-        gh.commit_all(ref, diagnosis.commit_message)
+        # The paths git actually patched — not `diagnosis.files_changed`, which
+        # is the model's claim about them — are what the commit is scoped to.
+        changed = apply_diff(diagnosis.diff, repo_root=repo_root)
+        gh.commit_paths(ref, diagnosis.commit_message, changed)
         gh.push(ref)
         pr_url = gh.open_pull_request(
             head=ref,
