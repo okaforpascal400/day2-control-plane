@@ -1,0 +1,71 @@
+{{- /*
+Curated alert rules — exactly the signals Phase 3 sets out to catch, kept small
+and legible rather than inheriting the stack's ~100 default rules (which are off,
+see values.yaml). Prometheus discovers this via ruleSelectorNilUsesHelmValues:false.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: day2-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: day2-control-plane
+spec:
+  groups:
+    - name: day2.workloads
+      rules:
+        - alert: PodCrashLooping
+          # A container that keeps landing back in CrashLoopBackOff over 5m.
+          expr: max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{`{{ $labels.namespace }}`}}/{{`{{ $labels.pod }}`}} is crash-looping"
+            description: "Container {{`{{ $labels.container }}`}} has been in CrashLoopBackOff for over 5 minutes."
+
+    - name: day2.node
+      rules:
+        - alert: NodeMemoryPressure
+          # Available memory under 15% for 10m — the t3.small line to watch.
+          expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Node {{`{{ $labels.instance }}`}} is under memory pressure"
+            description: "Memory usage has been above 85% for 10 minutes ({{`{{ $value | humanizePercentage }}`}} used)."
+        - alert: NodeDiskAlmostFull
+          expr: (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!="rootfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="rootfs"}) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Node {{`{{ $labels.instance }}`}} root filesystem almost full"
+            description: "Root filesystem usage has been above 85% for 10 minutes."
+
+    - name: day2.app
+      rules:
+        - alert: JobQueueStuck
+          # A pending backlog that is not draining: >10 pending and zero
+          # completions for 10m means the worker is not making progress.
+          expr: |
+            sum(day2_job_queue_depth{status="pending"}) > 10
+            and
+            sum(rate(day2_jobs_processed_total{result="completed"}[10m])) == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Job queue is stuck"
+            description: "More than 10 jobs are pending and none have completed in the last 10 minutes — the worker is not draining the queue."
+        - alert: HighApiErrorRate
+          expr: |
+            sum(rate(http_requests_total{status="5xx"}[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 1e-9) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "API 5xx error ratio above 5%"
+            description: "More than 5% of API responses have been 5xx for 5 minutes."

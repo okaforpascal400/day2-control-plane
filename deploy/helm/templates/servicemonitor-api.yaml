@@ -1,0 +1,20 @@
+{{- if .Values.monitoring.enabled }}
+# Prometheus scrapes the api's /metrics through its existing Service port.
+# Gated on monitoring.enabled: the ServiceMonitor CRD only exists where the
+# observability stack (deploy/observability) is installed.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "day2.fullname" . }}-api
+  labels:
+    {{- include "day2.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "day2.selectorLabels" (dict "ctx" . "component" "api") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.interval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+{{- end }}

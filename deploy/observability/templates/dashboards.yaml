@@ -1,0 +1,23 @@
+{{- /*
+One ConfigMap per dashboards/*.json, labelled so the Grafana sidecar imports it
+into a "day2" folder. Editing the JSON files is all it takes to change a
+dashboard — no template edits.
+*/}}
+{{- range $path, $bytes := .Files.Glob "dashboards/*.json" }}
+{{- $file := base $path }}
+{{- $name := trimSuffix ".json" $file }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: day2-dashboard-{{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: day2-control-plane
+  annotations:
+    grafana_folder: "day2"
+data:
+  {{ $file }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}

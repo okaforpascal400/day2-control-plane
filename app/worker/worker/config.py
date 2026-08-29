@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     heartbeat_path: str = Field(default="/tmp/worker-heartbeat")
     heartbeat_max_age_seconds: int = Field(default=30, ge=1)
 
+    # Prometheus /metrics is served on this port by a background thread. The
+    # worker is single-replica, so its queue-depth gauge is unambiguous.
+    metrics_port: int = Field(default=9000, ge=1, le=65535)
+
 
 @lru_cache
 def get_settings() -> Settings:
