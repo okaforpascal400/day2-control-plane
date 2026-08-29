@@ -234,6 +234,15 @@ two `bad-dep` attempts produced two different bundles under the same name on
 different runs. Address a bundle by its triage run id; the name alone is not
 unique.
 
+Two details that the table alone would let you read too generously. Attempt 2 was
+a **hand re-triage** (`workflow_dispatch`) of the same failed run, once the
+Actions setting that blocked attempt 1 was in place — so the automatic
+`workflow_run` trigger is demonstrated by attempt 1 and by `fail-test`, not by
+the run that opened #12. And of the 17 triage-agent runs on this repo, 14 were
+`skipped` by the workflow's `if:` gate before a runner was allocated: green ci
+runs and `triage/*` branches, stopped at zero cost. Three runs did work; those
+are the three above.
+
 ```bash
 gh run download 33257066844 -D ./evidence    # -> triage-audit-33256422303/triage-audit.jsonl
 ```
