@@ -10,7 +10,7 @@ from api.main import create_app
 async def test_health_ok(app_client: AsyncClient) -> None:
     response = await app_client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy", "service": "api-test"}
+    assert response.json() == {"status": "ok", "service": "api-test"}
 
 
 @pytest.mark.asyncio
