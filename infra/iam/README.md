@@ -12,6 +12,101 @@ approve — CLAUDE.md rule 3).
 
 ---
 
+# `ANTHROPIC_API_KEY` — the project's first stored credential
+
+Phase 4 introduces the first and, so far, only **long-lived secret this
+repository holds**: the Anthropic API key the triage agent uses. Every other
+credential in this project is either short-lived (the cost sentinel's OIDC
+token, the workflow's per-run `GITHUB_TOKEN`) or lives only on Pascal's machine
+(`day2-terraform`). This one is stored, so it gets written down.
+
+| | |
+|---|---|
+| Name | `ANTHROPIC_API_KEY` |
+| Kind | GitHub Actions **repository secret** |
+| Used by | `.github/workflows/triage-agent.yml` → `agents/core/day2_agents/claude.py` |
+| Reaches | `api.anthropic.com` only |
+| Set by | Pascal, manually — see the command below |
+
+## Setting it
+
+Run this yourself; nothing in this repo can create it (agents propose, humans
+approve — CLAUDE.md rule 3):
+
+```
+gh secret set ANTHROPIC_API_KEY --repo okaforpascal400/day2-control-plane
+```
+
+The command prompts for the value on stdin rather than taking it as an
+argument, so the key never lands in shell history or a process listing. Verify
+with `gh secret list` — which shows the name and update time, never the value.
+
+## Why this one cannot use OIDC
+
+The cost sentinel authenticates to AWS with a short-lived OIDC token and holds
+no stored credential at all ([ADR 0002](../../docs/adr/0002-cost-sentinel-auth.md)).
+That is the right pattern and it is used wherever it is available. It is not
+available here.
+
+OIDC works because AWS IAM can be configured to *trust GitHub as an identity
+provider*: the workflow presents a signed token asserting "I am
+`repo:okaforpascal400/day2-control-plane:ref:refs/heads/main`", and AWS
+exchanges it for temporary credentials against a role whose trust policy pins
+that exact subject. It requires the receiving service to implement OIDC
+federation and to let the customer define the trust relationship.
+
+The Anthropic API authenticates with an API key. There is no federation
+endpoint to exchange a GitHub token against, and therefore no way to express
+"only this repository, only this branch" on the provider's side. A stored
+secret is the only available mechanism, so the controls have to sit around it
+rather than inside it.
+
+## Blast radius if it leaks
+
+**What an attacker gets.** The ability to spend money against the Anthropic
+account the key belongs to, up to that account's rate and spend limits, and the
+ability to send arbitrary prompts. That is the whole of it.
+
+**What they do not get.** The key is not a GitHub credential and grants nothing
+in this repository: no push, no PR, no read of private code, no workflow
+execution. It is not an AWS credential and touches no infrastructure. It cannot
+read anything — the Anthropic API is stateless here, and no conversation,
+document or file is stored under this key. Nothing in the audit trail or any
+artifact is reachable with it.
+
+**Exposure surface, and why it is small.**
+
+- The secret is injected as an environment variable for one step of one
+  workflow. GitHub masks it in logs, and `claude.py` reads it from the
+  environment at call time — it is never written to disk, never logged, and
+  never placed in a prompt (there is a test asserting the key does not appear
+  in the prompt: `agents/triage/tests/test_agent.py`).
+- `triage-agent.yml` runs on `workflow_run`, which executes the **default
+  branch's** copy of the workflow. A pull request — including one from a fork —
+  cannot modify the workflow to exfiltrate the secret, because the version that
+  runs is the one already on `main`. This is the main reason the trigger is
+  `workflow_run` and not `pull_request`.
+- The agent is forbidden from proposing changes under `.github/`
+  (`agents/core/day2_agents/guardrails.py`), so it cannot author a PR that
+  would widen its own access to the secret even if a human merged it without
+  reading it.
+
+**If it leaks:** revoke it in the Anthropic console first (revocation is
+immediate and the key is single-purpose, so nothing else breaks), issue a new
+one, re-run the `gh secret set` command above, and check the account's usage
+for the exposure window. There is no rotation coupling — no other system holds
+this key.
+
+## Cost exposure in normal operation
+
+One model call per triage, on a pinned model with a hard `max_tokens` ceiling
+(`agents/core/day2_agents/claude.py`). Every call's real cost is computed from
+its own token counts and written to the audit trail, so spend is measured
+rather than estimated. Triage only fires on a CI failure, which bounds the call
+rate to how often the build breaks.
+
+---
+
 # `day2-terraform` permissions
 
 `day2-terraform-policy.json` is the **least-privilege** policy the `day2-terraform`

@@ -46,9 +46,9 @@ jobs:
           echo "Installing ${ruff_pin}"
           pip install "${ruff_pin}"
       - name: Lint
-        run: ruff check --output-format=github app
+        run: ruff check --output-format=github app agents
       - name: Check formatting
-        run: ruff format --check app
+        run: ruff format --check app agents
 
   test:
     name: pytest (${{ matrix.service }})
@@ -90,6 +90,30 @@ jobs:
           DAY2_TEST_DATABASE_URL: postgresql+asyncpg://day2:day2@localhost:5432/day2_test
         run: pytest -q
 
+  agents:
+    name: pytest (agents/${{ matrix.package }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [core, triage]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: agents/${{ matrix.package }}/requirements-dev.txt
+      - name: Install dependencies
+        working-directory: agents/${{ matrix.package }}
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        working-directory: agents/${{ matrix.package }}
+        # Import roots come from each package's pytest.ini, same convention as
+        # the app services. The guardrail tests are the ones that matter: they
+        # assert the agent library refuses what it must refuse.
+        run: pytest -q
+
   semgrep:
     name: semgrep
     runs-on: ubuntu-24.04
@@ -120,7 +144,7 @@ jobs:
     name: image (${{ matrix.service }})
     # Publishing is gated on every other check, so a red lint or a semgrep
     # finding can never yield a pushed image.
-    needs: [lint, test, semgrep]
+    needs: [lint, test, agents, semgrep]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -218,3 +242,9 @@ jobs:
         run: |
           helm lint deploy/helm -f deploy/helm/values-local.yaml
           helm template day2 deploy/helm -f deploy/helm/values-local.yaml >/dev/null
+      - name: Chart env contract
+        # `helm lint` renders a misspelled DAY2_* env var perfectly happily, and
+        # pydantic-settings is configured with extra="ignore", so the service
+        # would start on the default and the bug would surface only as a metric
+        # nobody is watching. This is the gate that catches it.
+        run: python3 deploy/helm/scripts/check_env_contract.py

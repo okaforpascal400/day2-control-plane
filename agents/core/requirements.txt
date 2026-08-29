@@ -1,0 +1,7 @@
+# Shared runtime deps for every agent. Exact pins per CLAUDE.md rule 2.
+#
+# Deliberately tiny: the agents shell out to `gh` and `git` (already present on
+# the runner) rather than pulling a GitHub SDK, so the only real dependency is
+# the Claude client. Fewer deps = smaller supply-chain surface for code that
+# holds an API key.
+anthropic==1.2.0
