@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -14,6 +15,14 @@ from tests.conftest import fail, ok
 
 def helper(scopes, audit, runner, repo="okaforpascal400/day2-control-plane"):
     return GitHubHelper(scopes, audit, repo=repo, runner=runner)
+
+
+def on_branch(scopes, audit, runner, ref="triage/42-x"):
+    """A helper whose checkout is already on `ref`, with a clean index."""
+    runner.results["rev-parse --abbrev-ref"] = ok(ref + "\n")
+    runner.results["rev-parse HEAD"] = ok("deadbeef1234\n")
+    runner.results["diff --cached"] = ok("")
+    return helper(scopes, audit, runner)
 
 
 # --------------------------------------------------------------- the refusals
@@ -117,16 +126,60 @@ def test_commit_refuses_when_the_checkout_is_not_the_triage_branch(
     runner.results["rev-parse --abbrev-ref"] = ok("main\n")
     gh = helper(full_scopes, audit, runner)
     with pytest.raises(GuardrailViolation, match="expected"):
-        gh.commit_all("triage/42-x", "fix: something")
+        gh.commit_paths("triage/42-x", "fix: something", ["app/api/requirements.txt"])
     assert not runner.ran("commit")
 
 
 def test_commit_uses_the_bot_identity(full_scopes, audit, runner):
-    runner.results["rev-parse --abbrev-ref"] = ok("triage/42-x\n")
-    runner.results["rev-parse HEAD"] = ok("deadbeef1234\n")
-    gh = helper(full_scopes, audit, runner)
-    assert gh.commit_all("triage/42-x", "fix: pin the dep") == "deadbeef1234"
+    gh = on_branch(full_scopes, audit, runner)
+    sha = gh.commit_paths("triage/42-x", "fix: pin the dep", ["app/api/x.txt"])
+    assert sha == "deadbeef1234"
     assert runner.ran("user.name=day2-triage-agent[bot]")
+
+
+# ------------------------------------------------- the commit touches only the fix
+
+
+def test_commit_stages_only_the_paths_the_diff_touched(full_scopes, audit, runner):
+    """Never `git add -A`: the working tree is not the proposal."""
+    gh = on_branch(full_scopes, audit, runner)
+    gh.commit_paths("triage/42-x", "fix: pin the dep", ["app/api/requirements.txt"])
+
+    assert not runner.ran("add", "-A")
+    assert runner.ran("add", "--", "app/api/requirements.txt")
+    assert runner.ran("commit", "-m", "--", "app/api/requirements.txt")
+
+
+def test_commit_refuses_when_something_else_reached_the_index(full_scopes, audit, runner):
+    """The audit log landing in the workspace is exactly this case."""
+    gh = on_branch(full_scopes, audit, runner)
+    runner.results["diff --cached"] = ok("app/api/requirements.txt\ntriage-audit.jsonl\n")
+    with pytest.raises(GuardrailViolation, match=re.escape("triage-audit.jsonl")):
+        gh.commit_paths("triage/42-x", "fix: pin the dep", ["app/api/requirements.txt"])
+    assert not runner.ran("commit", "-m")
+
+
+def test_commit_refuses_an_empty_pathspec(full_scopes, audit, runner):
+    gh = on_branch(full_scopes, audit, runner)
+    with pytest.raises(GuardrailViolation, match="empty pathspec"):
+        gh.commit_paths("triage/42-x", "fix: nothing", [])
+    assert runner.calls == []
+
+
+def test_commit_re_checks_the_paths_against_the_guardrail(full_scopes, audit, runner):
+    """A path that could not be diffed cannot be committed by another route."""
+    gh = on_branch(full_scopes, audit, runner)
+    with pytest.raises(GuardrailViolation, match=re.escape(".github/")):
+        gh.commit_paths("triage/42-x", "fix: ci", [".github/workflows/ci.yml"])
+    assert not runner.ran("commit")
+
+
+def test_commit_records_the_paths_in_the_trail(full_scopes, audit, runner):
+    gh = on_branch(full_scopes, audit, runner)
+    gh.commit_paths("triage/42-x", "fix: pin the dep", ["app/api/requirements.txt"])
+    entry = audit.entries[0].to_dict()
+    assert entry["action"] == "commit"
+    assert entry["metadata"]["paths"] == ["app/api/requirements.txt"]
 
 
 def test_push_targets_only_the_triage_ref(full_scopes, audit, runner):
@@ -163,10 +216,52 @@ def test_get_run_jobs_parses_the_api_payload(full_scopes, audit, runner):
     assert jobs[0]["conclusion"] == "failure"
 
 
-def test_an_expired_log_returns_empty_rather_than_raising(full_scopes, audit, runner):
-    runner.results["jobs/7/logs"] = fail("gone", code=1)
+# ------------------------------------------------------------ the log transports
+
+
+def test_the_job_log_comes_from_the_api_when_that_works(full_scopes, audit, runner):
+    runner.results["jobs/7/logs"] = ok("2026-01-01T00:00:00.0Z ##[error]boom\n")
     gh = helper(full_scopes, audit, runner)
+    assert "boom" in gh.get_job_log(7)
+    assert not runner.ran("run", "view")
+    assert audit.entries == []
+
+
+def test_the_job_log_falls_back_to_a_second_transport(full_scopes, audit, runner):
+    """The API endpoint 302s to a blob store, and that redirect can fail alone."""
+    runner.results["jobs/7/logs"] = fail("redirect not followed", code=1)
+    runner.results["run view"] = ok("job\tstep\t2026-01-01T00:00:00.0Z ##[error]boom\n")
+    gh = helper(full_scopes, audit, runner)
+
+    assert "boom" in gh.get_job_log(7)
+    assert runner.ran("run", "view", "--job", "7", "--log")
+    entry = audit.entries[0].to_dict()
+    assert entry["action"] == "read_job_log"
+    assert "run-view" in entry["decision_summary"]
+
+
+def test_an_empty_body_with_a_zero_exit_is_not_treated_as_a_log(
+    full_scopes, audit, runner
+):
+    """The defect that shipped: no bytes, no error, no trace of either."""
+    runner.results["jobs/7/logs"] = ok("")
+    runner.results["run view"] = ok("2026-01-01T00:00:00.0Z ##[error]boom\n")
+    gh = helper(full_scopes, audit, runner)
+    assert "boom" in gh.get_job_log(7)
+
+
+def test_a_log_no_transport_can_reach_is_audited_not_swallowed(
+    full_scopes, audit, runner
+):
+    runner.results["jobs/7/logs"] = fail("gone", code=1)
+    runner.results["run view"] = fail("expired", code=1)
+    gh = helper(full_scopes, audit, runner)
+
     assert gh.get_job_log(7) == ""
+    entry = audit.entries[0].to_dict()
+    assert entry["action"] == "log_unavailable"
+    assert "gone" in entry["decision_summary"]
+    assert "expired" in entry["decision_summary"]
 
 
 def test_a_failed_command_raises_with_the_stderr(full_scopes, audit, runner):
