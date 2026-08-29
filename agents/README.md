@@ -102,6 +102,14 @@ Two controls live in GitHub's repository settings rather than in this repo. A
 setting has no diff, no review and no history, so it is written down here —
 an undocumented setting is indistinguishable from an accident.
 
+**The order they were applied in is itself the control.** Branch protection went
+on `main` *first*, verified over the API, and only then was the Actions flag that
+lets the agent open a PR turned on. The gap between granting a permission and
+establishing the control that bounds it is a real window, and on a public repo
+the ordering is part of the governance story rather than an implementation
+detail. That is the standing rule for this project: compensating control first,
+grant second — never the reverse, and never "we'll add protection after".
+
 | Setting | Value | Why |
 |---|---|---|
 | Branch protection on `main` | 1 approving review, stale reviews dismissed, conversation resolution required, the seven CI gates required (`strict`), force-pushes and deletions off, `enforce_admins: false` | The load-bearing merge control. |
@@ -200,6 +208,144 @@ surface only as a throughput number nobody is watching — the quietest kind of
 config drift. `deploy/helm/scripts/check_env_contract.py` compares the chart's
 rendered env names against each service's `Settings` fields, read out of the
 source with `ast` so the check needs no dependencies installed.
+
+---
+
+## Demo record
+
+Two of the four seeded scenarios have been run end to end against live CI —
+seed → CI fails at the predicted gate → `triage-agent.yml` fires → a reviewable
+PR, human-merged. Every figure below is read out of the audit artifact that run
+produced. None of them is an estimate (CLAUDE.md rule 5).
+
+### Where the evidence lives
+
+One artifact per triage, attached to the **triage-agent run** rather than the
+failed `ci` run, named `triage-audit-<failed-run-id>`, retained 90 days:
+
+| Scenario | Failed `ci` run | Triage run — the bundle | Artifact | Outcome |
+|---|---|---|---|---|
+| `bad-dep` (attempt 1) | [33256422303](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33256422303) | [33256460118](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33256460118) | `triage-audit-33256422303` (1,204 B, 8 entries) | failed at `gh pr create` (defect 2) |
+| `bad-dep` (attempt 2) | [33256422303](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33256422303) | [33257066844](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33257066844) | `triage-audit-33256422303` (1,307 B, 10 entries) | [#12](https://github.com/okaforpascal400/day2-control-plane/pull/12) |
+| `fail-test` | [33260241253](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33260241253) | [33260274973](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33260274973) | `triage-audit-33260241253` (1,511 B, 11 entries) | [#15](https://github.com/okaforpascal400/day2-control-plane/pull/15) |
+
+The artifact name keys on the **failed** run id, not the triage run id, so the
+two `bad-dep` attempts produced two different bundles under the same name on
+different runs. Address a bundle by its triage run id; the name alone is not
+unique.
+
+Two details that the table alone would let you read too generously. Attempt 2 was
+a **hand re-triage** (`workflow_dispatch`) of the same failed run, once the
+Actions setting that blocked attempt 1 was in place — so the automatic
+`workflow_run` trigger is demonstrated by attempt 1 and by `fail-test`, not by
+the run that opened #12. And of the 17 triage-agent runs on this repo, 14 were
+`skipped` by the workflow's `if:` gate before a runner was allocated: green ci
+runs and `triage/*` branches, stopped at zero cost. Three runs did work; those
+are the three above.
+
+```bash
+gh run download 33257066844 -D ./evidence    # -> triage-audit-33256422303/triage-audit.jsonl
+```
+
+**Both artifacts expire 2026-11-27.** The trail is also written to the workflow
+log, which is readable in the Actions UI for as long as the run is retained, and
+the diagnosis itself survives independently as a commit comment on the failing
+commit and as the PR body. The artifact is the machine-readable copy, not the
+only copy — but it is the only copy with the token counts, so anything that
+needs to outlive November must be downloaded before then.
+
+### Per-triage cost — measured
+
+One model call per triage attempt, priced from the response's own token counts:
+
+| Triage run | Model | Input tok | Output tok | Log window | Cost |
+|---|---|---|---|---|---|
+| `bad-dep` attempt 1 | `claude-opus-5` | 7,433 | 1,249 | 0 ch | **$0.0684** |
+| `bad-dep` attempt 2 | `claude-opus-5` | 7,433 | 985 | 0 ch | **$0.0618** |
+| `fail-test` | `claude-opus-5` | 17,077 | 1,307 | 15,181 ch | **$0.1181** |
+| | | | | **total spent** | **$0.2482** |
+
+Three numbers, and they answer different questions:
+
+* **Cost of a triage that produces a reviewable PR: $0.0618–$0.1181.**
+* **Cost of getting `bad-dep` triaged: $0.1302** — attempt 1 paid full price for
+  a diagnosis, then threw it away when `gh pr create` failed. Defect 2 is not
+  only a reviewability gap; it is the one that wastes money.
+* **Total spent across the whole Phase 4 demo: $0.2482.**
+
+The spread between the two successful triages is not noise. `fail-test` cost
+roughly twice `bad-dep` because it had a log: 15,181 characters of it in the
+prompt, where both `bad-dep` attempts carried zero. So the honest reading is not
+"triage costs about $0.08" — it is that a *properly evidenced* triage costs about
+$0.12, and the cheap ones were cheap because they were flying blind.
+
+### What the trails demonstrate
+
+* `approved_by` is `null` on all 29 entries across all three runs. No agent-written
+  entry claims approval, which is the point of the field.
+* The same six scopes are declared at startup on every run, and nothing outside
+  them appears as an action.
+* On `fail-test`, `commit` records `paths: ["app/api/tests/test_health.py"]` —
+  the path-scoped commit from [#13](https://github.com/okaforpascal400/day2-control-plane/pull/13)
+  working. On `bad-dep`, which predates that fix, the same entry has no paths.
+* On `fail-test`, a `read_job_log` entry records the primary transport failing
+  and the fallback succeeding. That entry is [#13](https://github.com/okaforpascal400/day2-control-plane/pull/13)'s
+  other fix earning its keep on the very next run.
+
+### Three defects, found by running it
+
+The `bad-dep` arc is where the agent was first pointed at a real failure, and it
+produced three defects. Recording them is the point: a demo that only shows the
+happy path has not tested anything.
+
+| # | Defect | Status |
+|---|---|---|
+| 1 | `get_job_log` returned `""` on any failure, discarding exit code and stderr both — so the agent diagnosed from the commit diff alone (`log_window_chars: 0`) at full model cost, and *why* the log was missing was unrecoverable | Fixed, [#13](https://github.com/okaforpascal400/day2-control-plane/pull/13) |
+| 2 | A failure at `gh pr create` raises out of `triage_run`, so the commit-comment fallback never runs — attempt 1 left a pushed branch, a paid-for diagnosis and no explanation anywhere a reviewer would look | **Open** |
+| 3 | The agent's own audit log was committed into the proposal | Fixed, [#13](https://github.com/okaforpascal400/day2-control-plane/pull/13) |
+
+**Defect 3 in full**, because it is the one that bears directly on whether this
+agent is reviewable. `commit_all` did `git add -A`, `DAY2_AUDIT_LOG` pointed at
+the workspace root, and nothing gitignored it — so [#12](https://github.com/okaforpascal400/day2-control-plane/pull/12)
+carried `triage-audit.jsonl` as a second changed file alongside the one-line
+dependency fix it was proposing, and every future triage PR would have carried
+one too. Worse, the committed copy was *half-written*: five of the run's ten
+entries, truncated at the instant of commit, so the artifact in the diff
+disagreed with the artifact on the run. A reviewer who cannot tell the proposal
+from the agent's exhaust cannot review the proposal, which is the entire job of
+the PR. Fixed at both ends — `commit_paths` scoped to the paths `apply_diff`
+actually patched, and `DAY2_AUDIT_LOG` moved to `runner.temp` so the file is
+never in the tree to be staged.
+
+**Defect 1's cause is now known**, and it was not the suspect [#13](https://github.com/okaforpascal400/day2-control-plane/pull/13)
+named. That PR fixed the silence and added a second transport without claiming
+to know why the first failed, guessing at the documented endpoint's 302 to a
+blob store. The `fail-test` trail answers it:
+
+```
+read_job_log  primary log transport failed, 'run-view' succeeded with 72400 chars
+              — api: exit 1, 0 chars, stderr='the response contains terminal escape
+              sequences; pass --allow-escape-sequences to output it anyway'
+```
+
+`gh api .../jobs/{id}/logs` refuses to print CI logs at all, because they contain
+ANSI colour codes. Not a redirect, not an expiry — a client-side safety check
+that fails identically on every run. The fallback is therefore not a fallback in
+practice; it is the transport that works. This is exactly the evidence defect 1's
+fix existed to capture, captured on the first run after it shipped.
+
+Defect 2 is left open deliberately rather than fixed here: it is a real gap, it
+is recorded rather than quietly carried, and the wrap-up PR is not the place to
+change agent behaviour.
+
+### Scenario coverage, stated exactly
+
+`bad-dep` and `fail-test` have each had a full live run. `bad-env` and
+`vuln-image` are scripted in `scripts/break.sh` and each has its CI gate in
+place (`check_env_contract.py` was written for `bad-env`), but neither has been
+seeded against live CI, so neither has a triage run or an audit artifact. They
+are coverage of the *gates*, not yet of the agent.
+
 
 ---
 
