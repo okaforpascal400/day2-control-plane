@@ -386,7 +386,11 @@ nothing.
 
 CI goes red at the trivy gate, which is the point: `ci.yml` uploads both SBOMs
 *before* that gate, so the artifacts exist on the red run and the re-scan can
-be aimed at it with `-f source_run=<red ci run id>`.
+be aimed at it with `-f source_run=<red ci run id>`. This scenario has been run
+live — see the [Phase 5 demo record](#phase-5-demo-record--both-agents-live).
+Note that a red `ci` run also wakes `triage-agent.yml`, so seeding this costs
+two model calls, not one; both agents responding to one event is the honest
+behaviour and both refusals are recorded there.
 
 ```bash
 git switch -c phase4/scenario-bad-dep
@@ -414,7 +418,7 @@ source with `ast` so the check needs no dependencies installed.
 
 ## Demo record
 
-Two of the four seeded scenarios have been run end to end against live CI —
+Two of the four triage scenarios have been run end to end against live CI —
 seed → CI fails at the predicted gate → `triage-agent.yml` fires → a reviewable
 PR, human-merged. Every figure below is read out of the audit artifact that run
 produced. None of them is an estimate (CLAUDE.md rule 5).
@@ -542,17 +546,109 @@ name and the command to finish the job by hand, while a guardrail violation at
 the same point stays fatal. The attempt-1 run above is the trail it was written
 from and is left as recorded.
 
+### Phase 5 demo record — both agents, live
+
+Run 2026-08-30 from the `stale-base` seed on [#24](https://github.com/okaforpascal400/day2-control-plane/pull/24). Every figure
+below is read out of the audit artifact that run produced; none is an estimate
+(CLAUDE.md rule 5).
+
+| Agent | Trigger | Run — the bundle | Artifact | Cost | Outcome |
+|---|---|---|---|---|---|
+| CVE response | re-scan of ci [33324677924](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324677924) | [33324812354](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324812354) | `cve-audit-33324812354` | **$0.1350** | [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25) |
+| Upgrade | `workflow_dispatch` on #19 | [33324691534](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324691534) | `upgrade-audit-19` | **$0.0731** | annotation on [#19](https://github.com/okaforpascal400/day2-control-plane/pull/19) |
+| Triage | ci #23 red at `image (worker)` | [33324684932](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324684932) | `triage-audit-33324603859` | **$0.1127** | diagnosis only |
+| Triage | ci #24 red at `image (web)` | [33324769639](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324769639) | `triage-audit-33324677924` | **$0.1680** | diagnosis only |
+
+**$0.4888** for the whole exercise — four runs, one model call each,
+`approved_by: null` on every entry.
+
+#### The CVE chain, end to end
+
+`scripts/break.sh stale-base` → `ci` red at `image (web)` / Scan image (trivy)
+→ re-scan of *that red run's* SBOMs → 2 findings / 1 CVE → agent → [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25).
+The seed strips the explanatory comment along with the bridge, so the model was
+never handed the CVE id, the package names or the fixed version.
+
+* **It rediscovered the original remediation unaided.** The agent proposed an
+  `apk` bridge to openssl 3.5.8-r0 in the runtime stage, placed after the
+  `COPY`s and before `USER 101` — the same shape as commit `4799195`, which it
+  could not see. Not the same text, and the difference is defect 4 below.
+* **The digest rule (`dd5b0bf`) fired in a live run**, and named the digest from
+  the open Renovate PR as the thing it declined to do: *"`base_image_bump` is
+  not defensible here — the evidence tells me only that the 1.31-alpine tag has
+  moved to `sha256:901e944d...`, not that the republished image carries openssl
+  3.5.8-r0."* Defect 3 was fixed on the strength of an argument; this is the
+  argument holding when it costs the agent its tidiest-looking option.
+* **Blast radius was bounded by evidence, not asserted.** Only `web` was
+  reported — the api and worker SBOMs re-scanned clean — so the re-scan
+  discriminates rather than flagging everything.
+* **One CVE, one PR.** The re-scan emitted two rows (`libcrypto3`, `libssl3`);
+  `e1d7ec7`'s grouping collapsed them into a single assessment and a single PR.
+* **`verify_fix` ran before the PR opened**, not after: the agent built the web
+  image and put it through the same digest-pinned trivy gate `ci.yml` uses —
+  *"web: builds, and the trivy gate passes clean."*
+
+#### Both Triage runs withheld their fix
+
+Neither Phase 5 red run produced a triage patch, and both refusals were correct.
+
+* On **#23** — an unseeded event: merging [#22](https://github.com/okaforpascal400/day2-control-plane/pull/22) made Renovate
+  rebase, and the `python:3.12-slim` bump went red at `image (worker)` on the
+  *same* CVE-2026-14456. Triage diagnosed base-image lag and posted a
+  diagnosis, `fix_available=False`, at medium confidence.
+* On **#24** — the seeded run. Triage read the commit diff, recognised the red
+  trivy gate as the *intended outcome of a scenario branch*, and withheld at
+  **high** confidence: *"no fix: red trivy gate is the intended scenario
+  outcome."* An agent that had tried to "fix" the seed would have been the more
+  expensive failure, and it is the one worth having tested.
+
+#### The Upgrade agent on #19, and two corrections to its annotation
+
+[#19](https://github.com/okaforpascal400/day2-control-plane/pull/19) is authored by `renovate[bot]`, so it was annotated **without**
+the `simulate` bypass — the author gate was exercised rather than stepped
+around. The agent returned `medium` risk, recommendation `review`, and reached
+the digest rule independently of the CVE agent: *"I cannot confirm which
+packages moved or which CVEs were added or resolved from the evidence given;
+that requires scanning the new digest."*
+
+That caution was not merely principled, it was **right on the facts**: as
+Phase 5 defect 3 records, digest `901e944` still ships libssl3/libcrypto3
+3.5.7-r0. Upstream republished the tag without the OpenSSL fix.
+
+Two things in that annotation are wrong, recorded here rather than quietly
+left standing:
+
+1. It calls the bridge a *"deliberate trivy-gate exception"* and a
+   *"suppression"* that may now be *"stale and should be dropped"*. It is
+   neither. `apk add --upgrade libssl3 libcrypto3` genuinely patches the
+   packages in the shipped image; nothing is suppressed and no finding is
+   waived — a `.trivyignore` entry would be a suppression, and the same
+   agent's CVE counterpart explicitly refused to write one. The
+   recommendation it draws (re-check whether the bridge is now a no-op) is
+   right; the mechanism it names is not.
+2. It cites `app/web/Dockerfile` **lines 21-23**. The block is lines 21-28 —
+   six lines of comment plus `USER root` and the `RUN`. It cited the comment's
+   opening and missed the code.
+
+Neither changes the recommendation, and both are the kind of error a reviewer
+reading the cited lines catches in seconds. They are recorded because an
+annotation that is *nearly* right about a security control is exactly the sort
+of output that gets skimmed and believed.
+
 ### Phase 5 defects, found by running it
 
-Three, all found by executing the pipeline against a genuinely vulnerable image
-rather than by reading it. Recorded here for the same reason the Phase 4
-defects are: a demo that only shows the happy path has not tested anything.
+Four. The first three were found by executing the pipeline against a genuinely
+vulnerable image rather than by reading it; the fourth is in the diff the agent
+actually produced on its first live run. Recorded here for the same reason the
+Phase 4 defects are: a demo that only shows the happy path has not tested
+anything.
 
 | # | Defect | Status |
 |---|---|---|
 | 1 | The daily re-scan read the syft SPDX SBOM and returned a permanent, confident **zero** on an image with two fixable HIGH CVEs | Fixed, `e1d7ec7` |
 | 2 | One CVE affecting two packages would have been assessed twice and filed as two PRs, breaking one-PR-per-CVE from the inside | Fixed, `e1d7ec7` |
 | 3 | A moved base-image tag was presented to the model as though it were a fixed one | Fixed, `dd5b0bf` |
+| 4 | The bridge the agent proposed pins `apk` to an exact version, so it fails the build rather than degrading to a no-op once Alpine supersedes it — contradicting the comment the agent wrote directly above it | Open, [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25) |
 
 **Defect 1 in full**, because it is the one worth remembering. The workflow
 parsed its SBOM, ran clean and went green — while reporting nothing on an image
@@ -588,24 +684,83 @@ its comment predicted it would stop doing. The evidence line said "this tag has
 moved; this digest may be used in a diff", which invites the inference that a
 newer digest is a patched one. It now says the opposite in as many words.
 
+**Defect 4 in full**, because it is the first defect found in an agent's own
+*output* rather than in the plumbing around it, and because the agent
+documented it against itself. The diff it proposed reads:
+
+```dockerfile
+# ... BRIDGE, not a fix: when a rebuilt base image carries
+# openssl >= 3.5.8-r0 the apk constraint is already satisfied, this RUN becomes
+# a no-op, and it should be removed together with a digest bump of NGINX_IMAGE.
+USER root
+RUN apk add --no-cache --upgrade libssl3=3.5.8-r0 libcrypto3=3.5.8-r0
+```
+
+The comment is correct about what a bridge should do. The command does not do
+it. `4799195` used the same command *unpinned*; the agent added `=3.5.8-r0` to
+both packages, and an exact pin does not degrade to a no-op — it degrades to a
+build failure, on exactly the event the comment is describing. Measured against
+the pinned base image, exit codes are `apk`'s own:
+
+| `RUN` form | base at 3.5.7-r0 | base already at 3.5.8-r0 | base moved past 3.5.8-r0 |
+|---|---|---|---|
+| `--upgrade libssl3 libcrypto3` — `4799195` | upgrades to 3.5.8-r0 | `exit 0`, no-op | `exit 0`, no-op |
+| `--upgrade libssl3=3.5.8-r0 libcrypto3=3.5.8-r0` — the agent | upgrades to 3.5.8-r0 | `exit 0`, no-op | **`exit 12`, build fails** |
+
+The last column is measured by pinning to an already-superseded version
+(`=3.5.6-r0`), which puts `apk` in the identical position it will be in once
+3.5.8-r0 is superseded: `ERROR: unable to select packages: breaks:
+world[libssl3=3.5.6-r0]`. Alpine's index carries the current version of a
+package, not a back-catalogue, so this is the *expected* path rather than an
+edge case — and the failure lands on whoever next builds `web`, long after
+everyone has stopped thinking about this CVE.
+
+Two things about it are worth more than the fix itself.
+
+**The agent knew.** Its own confidence note, in the PR body, reads: *"pinning
+apk to an exact version means the RUN will fail if alpine later supersedes
+3.5.8-r0 before this bridge is removed."* It identified the defect, wrote it
+down where a reviewer would see it, and shipped the pin anyway. The
+human-in-the-loop pillar is doing real work here: the disclosure was good
+enough that the review caught it, which is the arrangement working as designed
+rather than an argument for trusting the output more.
+
+**`verify_fix` structurally could not catch it.** The agent built the image and
+ran the real trivy gate, and the gate passed — because the pin is correct
+*today*. This is a failure dated to a future package release, and no
+build-and-scan of the present tree can see it. Output verification (pillar 6)
+bounds the class of defect that reaches a reviewer; it does not empty it. Every
+verified-clean claim in a CVE PR should still be read as "true at build time",
+which is what it is.
+
 ### Phase 5 coverage, stated exactly
 
-**Neither Phase 5 agent has had a live run yet, and neither has a cost.** Both
-are complete, tested (`cve-response` 64, `upgrade` 35) and verified as far as
-they can be without one:
+**Both agents have now had a live run**, recorded above, with a measured cost
+each. What that does and does not cover:
 
-* The whole CVE evidence path was run locally against a genuinely vulnerable
-  image — build → syft + trivy SBOMs → `trivy sbom` → `collect_cve_findings.py`
-  → grouped by CVE → the full prompt assembled, with the base-image digest
-  resolved live from Docker Hub. That run is what found both defects fixed in
-  `e1d7ec7`. It stops short of the model call.
-* The Upgrade agent has been exercised against Renovate's exact PR shape in
-  tests, not against a live Renovate PR.
-
-Neither can go further from a local checkout: `ANTHROPIC_API_KEY` is a
-repository secret, and `workflow_dispatch` only offers a workflow that is
-already on the default branch. So the seeded runs happen after this branch
-merges, and the demo record below is written from them — not before.
+* **CVE Response — the full path, live.** Seed → red `ci` → re-scan of that
+  run's SBOMs → finding → model call → verified diff → branch → PR. One CVE,
+  one PR, and one defect in the output (defect 4 above).
+* **Upgrade — live, against a real Renovate PR.** [#19](https://github.com/okaforpascal400/day2-control-plane/pull/19) is
+  genuinely authored by `renovate[bot]`, so the `simulate` bypass was not used
+  and the author gate was exercised rather than stepped around.
+* **Not covered: the daily schedule.** The `schedule:` trigger in
+  `sbom-rescan.yml` is still commented out — going live is deliberately a
+  reviewed one-line diff rather than a setting with no history. Every run so
+  far has been `workflow_dispatch`, so "found within a day" is a property of
+  the design, not yet of the deployment.
+* **Not covered: the diagnosis-only issue ending.** The CVE agent declares
+  `open_issue` and holds the scope, but this finding reached `fix_pr`. Of its
+  three endings, one has been taken live.
+* **Not covered: `pin_bump` and `base_image_bump`.** The one live finding was
+  an OS package in a base image, and the agent reasoned its way to
+  `apk_upgrade_bridge`. The other two remediation shapes remain test-covered
+  only.
+* **Nothing is merged.** [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25) is open pending the defect-4
+  correction, and CI has not run on `agent/cve-2026-14456`: GitHub does not
+  trigger workflows for events created with `GITHUB_TOKEN`, which is the only
+  credential the agent holds. The green run has to be started by a human, and
+  that is a property of the design rather than an oversight.
 
 ### Phase 4 scenario coverage, stated exactly
 
