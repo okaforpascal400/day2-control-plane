@@ -87,9 +87,12 @@
       of the CVE agent, and was right on the facts. Two accuracy defects in the
       annotation are recorded in `agents/README.md` rather than left standing.
       The `pull_request_target` trigger **is** live and has fired unprompted
-      three times ([33324677873](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324677873),
+      four times — the fourth on the Phase 5 wrap PR itself
+      ([33327253751](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33327253751)), skipped at the author
+      gate while the diff describing it was under review. The first three:
+      [33324677873](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324677873),
       [33325450487](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33325450487),
-      [33326274181](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33326274181)), skipping each at the
+      [33326274181](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33326274181) — skipping each at the
       author gate because the PR was human-authored. What it has not yet had is
       a `renovate[bot]` PR *opened* since the workflow landed on `main` — the
       three open Renovate PRs all predate it, which is why #19 was annotated by
