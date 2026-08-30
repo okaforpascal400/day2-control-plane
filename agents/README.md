@@ -648,7 +648,7 @@ anything.
 | 1 | The daily re-scan read the syft SPDX SBOM and returned a permanent, confident **zero** on an image with two fixable HIGH CVEs | Fixed, `e1d7ec7` |
 | 2 | One CVE affecting two packages would have been assessed twice and filed as two PRs, breaking one-PR-per-CVE from the inside | Fixed, `e1d7ec7` |
 | 3 | A moved base-image tag was presented to the model as though it were a fixed one | Fixed, `dd5b0bf` |
-| 4 | The bridge the agent proposed pins `apk` to an exact version, so it fails the build rather than degrading to a no-op once Alpine supersedes it — contradicting the comment the agent wrote directly above it | Open, [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25) |
+| 4 | The bridge the agent proposed pins `apk` to an exact version, so it fails the build rather than degrading to a no-op once Alpine supersedes it — contradicting the comment the agent wrote directly above it | Fixed, [#27](https://github.com/okaforpascal400/day2-control-plane/pull/27) |
 
 **Defect 1 in full**, because it is the one worth remembering. The workflow
 parsed its SBOM, ran clean and went green — while reporting nothing on an image
@@ -732,6 +732,22 @@ build-and-scan of the present tree can see it. Output verification (pillar 6)
 bounds the class of defect that reaches a reviewer; it does not empty it. Every
 verified-clean claim in a CVE PR should still be read as "true at build time",
 which is what it is.
+
+Fixed at both ends in [#27](https://github.com/okaforpascal400/day2-control-plane/pull/27), because the prompt already asked for
+the unpinned form and the model produced the pinned one anyway — so a
+prompt-only fix would be repeating the step that just failed. The bridge
+paragraph now says the fixed version belongs in the *comment* and never in the
+command, and `reject_pinned_apk_bridge()` runs beside `validate_diff` so a
+pinned bridge takes the route every other bad patch takes: no branch, no push,
+an honest issue. The same shape as `main` being unwritable twice over — the
+prompt is the instruction, the gate is the control, and they are allowed to
+disagree.
+
+The correction to the proposal itself is `4d06897` on `agent/cve-2026-14456`,
+kept as a separate commit beneath the agent's own so `git log` distinguishes
+the two. Neither branch merged: [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25) targets the seed branch, and
+`main` already carries the correct unpinned bridge from `4799195`, so there was
+never anything there for `main` to gain.
 
 ### Phase 5 coverage, stated exactly
 
