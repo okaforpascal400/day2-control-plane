@@ -55,3 +55,55 @@ def test_merge_is_not_a_grantable_action():
     """The vocabulary itself has no merge, deploy or release."""
     values = {a.value for a in Action}
     assert not values & {"merge_pr", "merge", "deploy", "release", "delete_branch"}
+
+
+# ------------------------------------------------- the Phase 5 additions
+
+
+@pytest.mark.parametrize(
+    "action", [Action.READ_PR, Action.OPEN_ISSUE, Action.COMMENT_ON_PR]
+)
+def test_the_phase5_actions_are_grantable(action):
+    scopes = PermissionSet.declare("cve-response", [action])
+    scopes.require(action)
+
+
+def test_commenting_on_a_pr_is_not_commenting_on_a_run():
+    """Two surfaces, two scopes. Holding one must never imply the other."""
+    pr_only = PermissionSet.declare("upgrade", [Action.COMMENT_ON_PR])
+    with pytest.raises(PermissionDenied, match="comment_on_run"):
+        pr_only.require(Action.COMMENT_ON_RUN)
+
+    run_only = PermissionSet.declare("triage", [Action.COMMENT_ON_RUN])
+    with pytest.raises(PermissionDenied, match="comment_on_pr"):
+        run_only.require(Action.COMMENT_ON_PR)
+
+
+def test_reading_a_pr_grants_no_write_at_all():
+    """The Upgrade agent's real shape: it reads and comments, and that is all."""
+    upgrade = PermissionSet.declare(
+        "upgrade", [Action.CALL_MODEL, Action.READ_PR, Action.COMMENT_ON_PR]
+    )
+    for denied in (
+        Action.CREATE_BRANCH,
+        Action.PUSH_COMMIT,
+        Action.OPEN_PR,
+        Action.OPEN_ISSUE,
+    ):
+        with pytest.raises(PermissionDenied):
+            upgrade.require(denied)
+
+
+def test_the_vocabulary_still_has_no_merge_after_the_widening():
+    """Phase 5 added three members. None of them is a way to change main."""
+    values = {a.value for a in Action}
+    assert not values & {
+        "merge_pr",
+        "merge",
+        "approve_pr",
+        "review_pr",
+        "deploy",
+        "release",
+        "delete_branch",
+        "close_pr",
+    }

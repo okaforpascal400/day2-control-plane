@@ -132,11 +132,34 @@ def test_commit_refuses_when_the_checkout_is_not_the_triage_branch(
     assert not runner.ran("commit")
 
 
-def test_commit_uses_the_bot_identity(full_scopes, audit, runner):
-    gh = on_branch(full_scopes, audit, runner)
+def test_commit_uses_the_bot_identity(audit, runner):
+    """Triage's identity is unchanged by the Phase 5 rework — byte for byte."""
+    triage = PermissionSet.declare("triage", list(Action))
+    gh = on_branch(triage, audit, runner)
     sha = gh.commit_paths("triage/42-x", "fix: pin the dep", ["app/api/x.txt"])
     assert sha == "deadbeef1234"
     assert runner.ran("user.name=day2-triage-agent[bot]")
+    assert runner.ran("user.email=triage-agent@users.noreply.github.com")
+
+
+def test_each_agent_signs_its_own_commits(audit, runner):
+    """A CVE fix must not appear in git history authored by the triage agent."""
+    cve = PermissionSet.declare("cve-response", list(Action))
+    gh = on_branch(cve, audit, runner, ref="agent/cve-2026-14456")
+    gh.commit_paths("agent/cve-2026-14456", "fix: bump libssl3", ["app/web/Dockerfile"])
+    assert runner.ran("user.name=day2-cve-response-agent[bot]")
+    assert not runner.ran("day2-triage-agent[bot]")
+
+
+@pytest.mark.parametrize("agent", ["Triage", "a/b", "x y", "--upload-pack=evil", ""])
+def test_an_unsafe_agent_name_cannot_reach_the_git_identity(agent, audit, runner):
+    """The name is interpolated into `git -c user.name=`; keep it boring."""
+    scopes = PermissionSet.declare("placeholder", list(Action))
+    object.__setattr__(scopes, "agent", agent)
+    gh = helper(scopes, audit, runner)
+    with pytest.raises(GuardrailViolation, match="refusing to author"):
+        gh.create_branch("agent/x", "abc1234")
+    assert runner.calls == []
 
 
 # ------------------------------------------------- the commit touches only the fix
@@ -281,3 +304,144 @@ def test_no_command_is_ever_built_as_a_shell_string(full_scopes, audit, runner):
     for call in runner.calls:
         assert isinstance(call, list)
         assert all(isinstance(arg, str) for arg in call)
+
+
+# ------------------------------------------------- Phase 5: PRs and issues
+#
+# Three capabilities were added for the CVE Response and Upgrade agents. Each
+# is either a read or the weakest write GitHub offers, and the tests below are
+# mostly about what they still cannot do.
+
+
+def upgrade_scopes():
+    """The Upgrade agent's real declaration: read a PR, comment on it, nothing else."""
+    return PermissionSet.declare(
+        "upgrade", [Action.CALL_MODEL, Action.READ_PR, Action.COMMENT_ON_PR]
+    )
+
+
+def test_pr_reads_require_the_read_pr_scope(audit, runner):
+    gh = helper(PermissionSet.declare("upgrade", [Action.CALL_MODEL]), audit, runner)
+    for call in (
+        lambda: gh.get_pull_request(19),
+        lambda: gh.get_pull_request_diff(19),
+        lambda: gh.list_issues(),
+    ):
+        with pytest.raises(PermissionDenied, match="read_pr"):
+            call()
+    assert runner.calls == []
+
+
+def test_get_pull_request_parses_the_api_payload(full_scopes, audit, runner):
+    runner.results["pulls/19"] = ok(
+        json.dumps({"number": 19, "user": {"login": "renovate[bot]"}})
+    )
+    gh = helper(full_scopes, audit, runner)
+    assert gh.get_pull_request(19)["user"]["login"] == "renovate[bot]"
+
+
+def test_the_pr_diff_is_asked_for_by_accept_header_not_a_review_endpoint(
+    full_scopes, audit, runner
+):
+    """Same resource, different representation — and never `/pulls/{n}/comments`."""
+    runner.results["pulls/19"] = ok("diff --git a/x b/x\n")
+    gh = helper(full_scopes, audit, runner)
+    assert "diff --git" in gh.get_pull_request_diff(19)
+    assert runner.ran("--header", "Accept: application/vnd.github.diff")
+
+
+def test_list_issues_returns_pull_requests_too(full_scopes, audit, runner):
+    """The dedupe question is 'an open PR *or* issue', and this is one call."""
+    runner.results["issues?state=open"] = ok(
+        json.dumps(
+            [
+                {"number": 20, "title": "CVE-2026-14456", "pull_request": {"url": "u"}},
+                {"number": 21, "title": "something else"},
+            ]
+        )
+    )
+    gh = helper(full_scopes, audit, runner)
+    items = gh.list_issues()
+    assert [i["number"] for i in items] == [20, 21]
+    assert "pull_request" in items[0]
+
+
+def test_list_issues_refuses_an_unknown_state(full_scopes, audit, runner):
+    gh = helper(full_scopes, audit, runner)
+    with pytest.raises(GitHubRefused, match="unknown issue state"):
+        gh.list_issues("everything")
+    assert runner.calls == []
+
+
+def test_reads_leave_no_audit_entry(full_scopes, audit, runner):
+    """The trail records what an agent *did*, and reading is not doing."""
+    runner.results["pulls/19"] = ok(json.dumps({"number": 19}))
+    runner.results["issues?state=open"] = ok("[]")
+    gh = helper(full_scopes, audit, runner)
+    gh.get_pull_request(19)
+    gh.list_issues()
+    assert audit.entries == []
+
+
+def test_create_issue_requires_its_own_scope(audit, runner):
+    gh = helper(upgrade_scopes(), audit, runner)
+    with pytest.raises(PermissionDenied, match="open_issue"):
+        gh.create_issue("CVE-2026-1", "body")
+    assert runner.calls == []
+    assert audit.entries == []
+
+
+def test_create_issue_posts_json_and_audits_the_url(full_scopes, audit, runner):
+    runner.results["issues"] = ok(json.dumps({"html_url": "https://x/issues/22"}))
+    gh = helper(full_scopes, audit, runner)
+    url = gh.create_issue("CVE-2026-14456 in libssl3", "## Diagnosis", ["cve"])
+    assert url == "https://x/issues/22"
+    assert json.loads(runner.stdins[0]) == {
+        "title": "CVE-2026-14456 in libssl3",
+        "body": "## Diagnosis",
+        "labels": ["cve"],
+    }
+    entry = audit.entries[0].to_dict()
+    assert entry["action"] == "open_issue"
+    assert entry["target"] == "https://x/issues/22"
+    assert entry["approved_by"] is None
+
+
+def test_commenting_on_a_pr_requires_its_own_scope(audit, runner):
+    run_only = PermissionSet.declare("triage", [Action.COMMENT_ON_RUN])
+    gh = helper(run_only, audit, runner)
+    with pytest.raises(PermissionDenied, match="comment_on_pr"):
+        gh.comment_on_pull_request(19, "risk: low")
+    assert runner.calls == []
+
+
+def test_a_pr_comment_is_a_timeline_comment_not_a_review(full_scopes, audit, runner):
+    """`/pulls/{n}/comments` would post a review comment. Reviewing is a human's job."""
+    runner.results["comments"] = ok(json.dumps({"html_url": "https://x/pull/19#c1"}))
+    gh = helper(full_scopes, audit, runner)
+    assert gh.comment_on_pull_request(19, "risk: low") == "https://x/pull/19#c1"
+
+    posted = [c for c in runner.calls if "POST" in c]
+    assert any("issues/19/comments" in " ".join(c) for c in posted)
+    assert not any("pulls/19/comments" in " ".join(c) for c in posted)
+    assert json.loads(runner.stdins[0]) == {"body": "risk: low"}
+    assert audit.entries[0].to_dict()["action"] == "comment_on_pr"
+
+
+def test_the_upgrade_agent_shape_can_read_and_comment_and_nothing_else(audit, runner):
+    """The whole point of the Upgrade agent: it cannot change the repository."""
+    gh = helper(upgrade_scopes(), audit, runner)
+    for call in (
+        lambda: gh.create_branch("agent/x", "abc1234"),
+        lambda: gh.push("agent/x"),
+        lambda: gh.open_pull_request("agent/x", "main", "t", "b"),
+        lambda: gh.create_issue("t", "b"),
+        lambda: gh.comment_on_commit("abc1234", "b"),
+        lambda: gh.get_run(42),
+    ):
+        with pytest.raises(PermissionDenied):
+            call()
+    with pytest.raises(GuardrailViolation):
+        gh.merge_pull_request(19)
+    assert runner.calls == []
+    assert audit.entries == []
