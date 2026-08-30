@@ -64,7 +64,22 @@
 
 ## Phase 5 — CVE Response + Upgrade Agents
 - [ ] Daily SBOM re-scan; CVE agent -> patch PR + blast radius
+      Live on 2026-08-30 from the `stale-base` seed ([#24](https://github.com/okaforpascal400/day2-control-plane/pull/24)): red
+      `ci` -> re-scan of that run's SBOMs -> 1 CVE across 2 packages in `web`
+      -> verified diff -> [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25), **$0.1350**. The agent
+      rediscovered `4799195`'s remediation with the naming comment stripped,
+      and refused the moved-digest shortcut. Not ticked: the `schedule:`
+      trigger is still commented out, so the *daily* part is designed and not
+      yet deployed, and #25 is unmerged pending the defect-4 correction.
 - [ ] Renovate + Upgrade Agent PR risk annotations
+      Live on 2026-08-30 against [#19](https://github.com/okaforpascal400/day2-control-plane/pull/19), a real `renovate[bot]` PR
+      annotated without the `simulate` bypass — medium risk, **$0.0731**. Two
+      accuracy defects in the annotation are recorded in `agents/README.md`.
+      Not ticked: it has annotated one PR, on the `workflow_dispatch` path; the
+      `pull_request_target` trigger has not fired on its own yet.
+- Four defects found by running the pipeline, the fourth in the agent's own
+  proposed diff and fixed in [#27](https://github.com/okaforpascal400/day2-control-plane/pull/27) — `agents/README.md`,
+  "Phase 5 defects, found by running it".
 
 ## Phase 6 — MCP Server + Observability Copilot
 - [ ] Read-only MCP: query_prometheus, search_logs, get_dashboard, read_runbook, git_history
