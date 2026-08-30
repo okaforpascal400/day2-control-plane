@@ -760,8 +760,11 @@ each. What that does and does not cover:
 * **Upgrade — live, against a real Renovate PR.** [#19](https://github.com/okaforpascal400/day2-control-plane/pull/19) is
   genuinely authored by `renovate[bot]`, so the `simulate` bypass was not used
   and the author gate was exercised rather than stepped around.
-* **Upgrade — the `pull_request_target` trigger has fired on its own.** Three
-  times, unprompted, on [#24](https://github.com/okaforpascal400/day2-control-plane/pull/24)
+* **Upgrade — the `pull_request_target` trigger has fired on its own.** Four
+  times, unprompted — including on the wrap PR that records this, which the
+  trigger skipped at the author gate while the diff describing it was under
+  review ([33327253751](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33327253751)). The first three were
+  on [#24](https://github.com/okaforpascal400/day2-control-plane/pull/24)
   ([33324677873](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324677873)), the demo-record PR
   ([33325450487](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33325450487)) and #27
   ([33326274181](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33326274181)) — each skipped at the
