@@ -189,13 +189,45 @@ jobs:
             -o "spdx-json=sbom-${{ matrix.service }}.spdx.json" \
             -o "syft-table"
 
+      # A second SBOM of the same image, and it is not redundant.
+      #
+      # The syft SPDX above is the portable, tool-neutral bill of materials and
+      # stays the document of record. It is also **not re-scannable for Alpine
+      # OS packages**, which was measured, not assumed: on the Phase 5
+      # `stale-base` scenario the same image scanned three ways gave
+      # `trivy image` -> 2 fixable HIGH, syft SPDX -> 0, syft CycloneDX -> 0,
+      # trivy CycloneDX -> 2.
+      #
+      # The cause is that Alpine advisories are keyed on the *source* package
+      # (`openssl`), not the binary one (`libssl3`). Trivy's own CycloneDX
+      # records that as `aquasecurity:trivy:SrcName`; syft records it only as an
+      # `upstream=` qualifier inside the purl, which trivy's SBOM decoder does
+      # not map back to a source name. So a daily re-scan of the syft SBOM
+      # would have found nothing, for ever, and looked like it was working.
+      #
+      # Ordered before the gate below on purpose: a red run still uploads its
+      # SBOMs, which is what lets sbom-rescan.yml be pointed at a deliberately
+      # vulnerable scenario run.
+      - name: Generate scannable SBOM (trivy)
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${PWD}:/out" -w /out \
+            -v "${HOME}/.cache/trivy:/root/.cache/trivy" \
+            "${TRIVY_IMAGE}" image \
+              --format cyclonedx \
+              --output "/out/sbom-${{ matrix.service }}.cdx.json" \
+              "${{ steps.ref.outputs.local }}"
+
       - name: Upload SBOM
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sbom-${{ matrix.service }}
-          path: sbom-${{ matrix.service }}.spdx.json
+          path: |
+            sbom-${{ matrix.service }}.spdx.json
+            sbom-${{ matrix.service }}.cdx.json
           if-no-files-found: error
-          # Phase 5 re-scans stored SBOMs daily for newly disclosed CVEs.
+          # Phase 5 re-scans the CycloneDX copy daily for newly disclosed CVEs.
           retention-days: 90
 
       - name: Scan image (trivy)

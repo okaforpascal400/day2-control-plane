@@ -8,6 +8,7 @@
 #   fail-test    pytest (api) / Run tests              a wrong assertion
 #   bad-env      helm lint / chart env contract        chart-vs-code config drift
 #   vuln-image   image (api) / Scan image (trivy)      a base image with HIGH CVEs
+#   stale-base   sbom-rescan / CVE response agent      a shipped, fixable HIGH
 #
 # Usage:
 #   scripts/break.sh <scenario>   apply the break (working tree only)
@@ -49,6 +50,17 @@ Seeded CI failure scenarios:
   vuln-image   app/api/Dockerfile             -> an old base image with HIGH CVEs
                expected gate: image (api) / Scan image (trivy)
 
+  stale-base   app/web/Dockerfile             -> drop the CVE-2026-14456 bridge
+               expected gate: image (web) / Scan image (trivy), AND a finding
+               for the CVE response agent to answer. This is the Phase 5
+               scenario and it is different in kind from the four above: those
+               break CI, this one restores a state this repository genuinely
+               shipped from — the runtime image before commit 4799195 patched
+               libssl3/libcrypto3. ci goes red at the trivy gate, but ci.yml
+               uploads the SBOM *before* that gate, so the artifact exists on
+               the red run and sbom-rescan.yml can be pointed at it with
+               `-f source_run=<that run id>`.
+
   restore      revert every file any scenario touched
   list         this message
 
@@ -59,6 +71,14 @@ Typical loop:
   gh pr create --fill   # ci.yml runs on pull_request; a push alone triggers nothing
   # ...CI fails, triage-agent.yml fires, a PR appears...
   scripts/break.sh restore && git commit -am 'test(triage): restore' && git push
+
+The Phase 5 loop is the same up to the red run, then points the rescan at it:
+  git switch -c phase5/scenario-stale-base
+  scripts/break.sh stale-base
+  git commit -am 'test(cve): seed a stale-base finding' && git push -u origin HEAD
+  gh pr create --fill                     # ci goes red at image (web)
+  gh workflow run sbom-rescan.yml \
+     -f scenario_ref=phase5/scenario-stale-base -f source_run=<red ci run id>
 EOF
 }
 
@@ -128,6 +148,25 @@ case "${1:-}" in
         echo "Seeding vuln-image — expect: image (api) / Scan image (trivy)"
         replace_in "app/api/Dockerfile" \
             "ARG PYTHON_IMAGE=${GOOD_IMAGE}" "ARG PYTHON_IMAGE=${VULN_IMAGE}"
+        ;;
+    stale-base)
+        echo "Seeding stale-base — expect: image (web) / Scan image (trivy),"
+        echo "  and a fixable HIGH in the web SBOM for the CVE response agent."
+        # The whole block, comment included. Leaving the comment behind would
+        # hand the agent its own answer — it names the CVE, the package and the
+        # fixed version — and a demo that tells the model what to conclude has
+        # verified nothing.
+        replace_in "app/web/Dockerfile" \
+            "# Base-image lag, not app code: nginx-unprivileged:1.31-alpine still ships
+# libssl3/libcrypto3 3.5.7-r0, carrying a fixable HIGH (CVE-2026-14456, OpenSSL
+# QUIC DoS) that the trivy gate rejects. No rebuilt nginx-unprivileged alpine tag
+# carries the fix yet, so pull the patched 3.5.8-r0 straight from Alpine's 3.24
+# repo. This is a bridge: once upstream republishes with >=3.5.8-r0 it becomes a
+# no-op and should be replaced by a plain base-digest bump.
+USER root
+RUN apk add --no-cache --upgrade libssl3 libcrypto3
+
+" ""
         ;;
     restore)
         restore

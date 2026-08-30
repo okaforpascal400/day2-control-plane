@@ -14,11 +14,12 @@ Three things happen here and nothing else:
   (CVE, package, installed version), listing every service affected, is both
   the truthful shape and the one that makes "one PR per CVE" natural.
 * **Report what is there, and only that.** Fields trivy did not supply are
-  `null`, never guessed. `layer` in particular is usually absent from an SBOM
-  scan — an SPDX document records packages, not the image layers that
-  introduced them — so it is reported as null rather than inferred. Mapping a
-  package to the Dockerfile stage that installs it is the agent's job, done
-  against the Dockerfile itself, where the answer is actually knowable.
+  `null`, never guessed. `layer` is present when the scanned SBOM carried it —
+  trivy's own CycloneDX does, which is one more reason the rescan reads that
+  copy rather than the syft SPDX beside it — and null when it did not. Null
+  means "not recorded", never "no layer". Mapping a package to the *Dockerfile
+  stage* that installs it stays the agent's job, done against the Dockerfile,
+  where the answer is knowable rather than inferred.
 
 No severity filtering happens here: trivy was already invoked with the exact
 filter `ci.yml` gates on, and re-filtering in a second place is how the two
@@ -63,9 +64,8 @@ def collect(report_dir: Path) -> dict[str, Any]:
                         "title": vuln.get("Title") or None,
                         "url": vuln.get("PrimaryURL") or None,
                         "purl": (vuln.get("PkgIdentifier") or {}).get("PURL"),
-                        # Present only when the scanner knew it; an SBOM scan
-                        # normally does not. Null means "not recorded", never
-                        # "no layer".
+                        # Present when the SBOM carried it. Null means "not
+                        # recorded", never "no layer".
                         "layer": (vuln.get("Layer") or {}).get("Digest") or None,
                         "pkg_class": result.get("Class") or None,
                         "pkg_type": result.get("Type") or None,
