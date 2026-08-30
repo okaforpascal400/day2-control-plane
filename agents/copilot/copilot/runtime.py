@@ -63,6 +63,7 @@ from day2_agents.claude import (
     EFFORT,
     MAX_TOKENS_CEILING,
     MODEL,
+    PRICE_PER_MTOK,
     ModelError,
     compute_cost_usd,
 )
@@ -99,18 +100,39 @@ MAX_TOKENS_PER_TURN = 2_000
 # which tool ran, with what arguments, and the citation id it can still cite —
 # and drops the payload it has already read.
 MAX_CONTEXT_TOKENS = 40_000
-KEEP_FULL_RESULTS = 3
+KEEP_FULL_RESULTS = 2
 
 # Over-investigation is a cost driver in its own right: the first live run made
 # 14 tool calls for one question, several of them redundant.
 MAX_TOOL_CALLS_PER_QUESTION = 12
 
-# Characters per token, used only for the pre-flight estimate. Deliberately low
-# (real English is ~4) so the estimate runs *high*: for a spend cap, erring
-# toward refusing a call is the safe direction. This is a local heuristic rather
-# than `client.messages.count_tokens` on purpose — the cap must work without an
-# extra network round-trip on every turn, and must be testable offline.
-CHARS_PER_TOKEN = 3.0
+# Input size comes from the API's own `count_tokens`, not a local heuristic.
+#
+# The heuristic that used to live here under-counted by 3x on real payloads
+# (30,009 actual tokens against 10,000 estimated), which is the wrong direction
+# for a spend cap and is how the second live run still breached it. `count_tokens`
+# is exact, free, and cheap; the heuristic survives only as a fallback if that
+# call fails, and it now over-counts deliberately.
+CHARS_PER_TOKEN = 1.5
+
+# Output tokens can EXCEED max_tokens on this model family, because adaptive
+# thinking is on by default and thinking tokens are billed as output. Measured
+# on the second live run: max_tokens was 2,000 and turns returned 2,100, 3,288
+# and 4,057 output tokens. Worst-case output pricing therefore has to allow for
+# the overrun, or the cap under-reserves exactly when the model thinks hardest.
+OUTPUT_OVERRUN_FACTOR = 3.0
+
+# Effort is the thinking-depth dial, and thinking is the cost driver above.
+# agents/core runs at "high" because the triage and CVE agents are writing code
+# diffs. The copilot reads telemetry and cites it — the reasoning is shallower
+# and the volume of tool output is the hard part — so it runs a notch lower.
+# This is a deliberate, documented deviation from the shared default.
+COPILOT_EFFORT = "medium"
+
+# The floor below which an answer is not worth attempting. If the remaining
+# budget cannot buy this many output tokens, the call is refused instead of
+# being made and truncated into uselessness.
+MIN_OUTPUT_TOKENS = 400
 
 _CITATION_RE = re.compile(r"\b(prometheus|loki|repo|git):(\d{8})\b")
 
@@ -152,6 +174,70 @@ Be concise. Lead with the answer, then the evidence for it. Do not narrate \
 which tools you are about to call."""
 
 
+def _has_dangling_tool_use(messages: list[dict[str, Any]]) -> list[str]:
+    """Tool-use ids in the final assistant turn with no answering tool_result.
+
+    The API requires every `tool_use` to be followed immediately by matching
+    `tool_result` blocks. A transcript that violates this fails with a 400 on
+    the *next* request, so the symptom appears far from the cause — worth a
+    cheap explicit check rather than a puzzling error later.
+    """
+    if not messages:
+        return []
+    pending: list[str] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            pending = [] if message.get("role") == "user" else pending
+            continue
+        if message.get("role") == "assistant":
+            pending = [
+                b.get("id")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "tool_use"
+            ]
+        elif message.get("role") == "user":
+            answered = {
+                b.get("tool_use_id")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "tool_result"
+            }
+            pending = [pid for pid in pending if pid not in answered]
+    return [pid for pid in pending if pid]
+
+
+def _blocks_to_dicts(content: Any) -> list[dict[str, Any]]:
+    """Normalise SDK content blocks to plain dictionaries.
+
+    The transcript is kept as pure JSON rather than as SDK objects, and that is
+    load-bearing in three places rather than a tidiness preference:
+
+    * `cache_control` can only be attached to a dict, so storing SDK objects
+      made the conversation cache breakpoint silently do nothing — `cache_write`
+      was 0 on every turn of a run whose input reached 78,469 fresh tokens.
+    * `count_tokens` and the trimming logic both walk the transcript, and both
+      are simpler and more reliable over plain data.
+    * Tests can build a transcript without constructing SDK objects.
+    """
+    blocks: list[dict[str, Any]] = []
+    for block in content or []:
+        if isinstance(block, dict):
+            blocks.append(dict(block))
+        elif hasattr(block, "model_dump"):
+            blocks.append({k: v for k, v in block.model_dump().items() if v is not None})
+        else:  # pragma: no cover - defensive, for test doubles
+            blocks.append({k: v for k, v in vars(block).items() if not k.startswith("_")})
+    return blocks
+
+
+STUB_MARKER = "__day2_elided__"
+
+
+def _is_stub(content: Any) -> bool:
+    """Whether a tool_result's content has already been replaced by a stub."""
+    return isinstance(content, str) and STUB_MARKER in content
+
+
 class BudgetExceeded(RuntimeError):
     """The session spend cap was reached."""
 
@@ -170,6 +256,8 @@ class Turn:
     cost_usd: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     model_calls: int = 0
     elapsed_ms: int = 0
     receipt: dict[str, Any] | None = None
@@ -232,19 +320,33 @@ class CopilotSession:
             )
 
     def estimate_input_tokens(self, system: str, messages: list[dict[str, Any]]) -> int:
-        """Rough, deliberately high, estimate of a request's input size.
+        """Exact input size from the API, with a conservative local fallback.
 
-        Counts the characters that will actually be serialised — system prompt,
-        every message, and the tool schemas, which are re-sent on every call and
-        are not negligible. Divided by a low chars-per-token so the number errs
-        upward.
+        `count_tokens` is free and exact, and the pre-flight cap is only as good
+        as this number — a local character heuristic under-counted by 3x and let
+        a session breach its budget. The fallback exists so a `count_tokens`
+        outage degrades to *over*-reserving rather than to overspending.
         """
+        try:
+            counted = self._ensure_client().messages.count_tokens(
+                model=MODEL,
+                system=system,
+                tools=self.registry.schemas(),
+                messages=messages,
+            )
+            return int(getattr(counted, "input_tokens", 0)) or self._fallback_tokens(
+                system, messages
+            )
+        except Exception:
+            return self._fallback_tokens(system, messages)
+
+    def _fallback_tokens(self, system: str, messages: list[dict[str, Any]]) -> int:
         payload = json.dumps(messages, default=str, ensure_ascii=False)
         schemas = json.dumps(self.registry.schemas(), default=str)
         characters = len(payload) + len(system) + len(schemas)
         return int(characters / CHARS_PER_TOKEN)
 
-    def _preflight(self, system: str, messages: list[dict[str, Any]]) -> None:
+    def _preflight(self, system: str, messages: list[dict[str, Any]]) -> int:
         """Refuse a call whose worst case would breach the cap.
 
         The worst case is knowable before sending: estimated input tokens at the
@@ -257,14 +359,34 @@ class CopilotSession:
         anything.
         """
         estimated_input = self.estimate_input_tokens(system, messages)
-        worst_case = compute_cost_usd(MODEL, estimated_input, MAX_TOKENS_PER_TURN)
-        if self.total_cost_usd + worst_case > self.budget_usd:
-            raise BudgetExceeded(
-                f"refusing the next call: spent ${self.total_cost_usd:.4f}, and "
-                f"this call could cost up to ${worst_case:.4f} "
-                f"(~{estimated_input:,} input tokens), which would exceed the "
-                f"${self.budget_usd:.2f} cap. Nothing was sent."
+        input_cost = compute_cost_usd(MODEL, estimated_input, 0)
+        headroom = self.budget_usd - self.total_cost_usd - input_cost
+
+        # Rather than refuse whenever the *maximum* response would breach the
+        # cap, buy the largest response the budget can still afford. The cap
+        # stays hard — the worst case is priced before sending either way — but
+        # a tight budget now shortens answers instead of rejecting them, which
+        # is the difference between a cap that works and a cap that is unusable.
+        # Price the overrun, not the nominal ceiling: a smaller `max_tokens`
+        # does not proportionally shrink thinking, so treating it as if it did
+        # manufactures headroom that does not exist. That is what let the second
+        # live run breach the cap after the first fix.
+        output_price = PRICE_PER_MTOK[MODEL]["output"] / 1_000_000
+        effective_price = output_price * OUTPUT_OVERRUN_FACTOR
+        affordable_output = int(headroom / effective_price) if headroom > 0 else 0
+        allowed = min(MAX_TOKENS_PER_TURN, affordable_output)
+
+        if allowed < MIN_OUTPUT_TOKENS:
+            worst_case = compute_cost_usd(
+                MODEL, estimated_input, int(MIN_OUTPUT_TOKENS * OUTPUT_OVERRUN_FACTOR)
             )
+            raise BudgetExceeded(
+                f"refusing the next call: spent ${self.total_cost_usd:.4f} of "
+                f"${self.budget_usd:.2f}, and this call needs at least "
+                f"${worst_case:.4f} (~{estimated_input:,} input tokens plus a "
+                f"{MIN_OUTPUT_TOKENS}-token floor). Nothing was sent."
+            )
+        return allowed
 
     def _trim_transcript(self) -> None:
         """Stub out old tool results once the transcript grows past the ceiling.
@@ -297,11 +419,13 @@ class CopilotSession:
         )
         for m_index, b_index in trimmable:
             block = self._messages[m_index]["content"][b_index]
-            if block.get("_trimmed"):
+            # "Already trimmed?" is answered by looking at the content, not by a
+            # marker key on the block. The API rejects unknown keys inside a
+            # tool_result (`tool_result._trimmed: Extra inputs are not
+            # permitted`), so bookkeeping must not live there.
+            if _is_stub(block.get("content")):
                 continue
-            stub = self._stub_for(block)
-            block["content"] = stub
-            block["_trimmed"] = True
+            block["content"] = self._stub_for(block)
             self.trimmed_results += 1
             if (
                 self.estimate_input_tokens(SYSTEM_PROMPT, self._messages)
@@ -320,6 +444,7 @@ class CopilotSession:
         keys = [k for k in original if k not in ("provenance", "citation_id")][:6]
         return json.dumps(
             {
+                STUB_MARKER: True,
                 "elided": True,
                 "note": (
                     "This result was read earlier in the conversation and its "
@@ -349,23 +474,42 @@ class CopilotSession:
         # needs to know the session is finished rather than that this question
         # happened to fail. Once at least one call has been made the loop below
         # degrades gracefully instead, so whatever evidence was gathered is kept.
-        self._preflight(SYSTEM_PROMPT, self._messages)
+        allowed_tokens = self._preflight(SYSTEM_PROMPT, self._messages)
 
         for _turn_number in range(MAX_TURNS):
             try:
                 self._check_budget()
-                self._preflight(SYSTEM_PROMPT, self._messages)
+                allowed_tokens = self._preflight(SYSTEM_PROMPT, self._messages)
             except BudgetExceeded as exc:
                 turn.stopped_early = str(exc)
                 break
 
+            dangling = _has_dangling_tool_use(self._messages)
+            if dangling:  # pragma: no cover - guarded by the exits above
+                raise ModelError(
+                    "refusing to send a transcript with unanswered tool_use "
+                    f"blocks: {', '.join(dangling)}"
+                )
+
             response = client.messages.create(
                 model=MODEL,
-                max_tokens=min(MAX_TOKENS_PER_TURN, MAX_TOKENS_CEILING),
-                output_config={"effort": EFFORT},
-                system=SYSTEM_PROMPT,
+                max_tokens=min(allowed_tokens, MAX_TOKENS_CEILING),
+                output_config={"effort": COPILOT_EFFORT},
+                # Cache the stable prefix. Render order is tools -> system ->
+                # messages, and the first two never change within a session, so
+                # a breakpoint on the system block lets every turn after the
+                # first read them at a tenth of the input rate. Input was the
+                # dominant cost in both overspending runs (86,230 tokens on one
+                # call), and most of it is prefix that is re-sent verbatim.
+                system=[
+                    {
+                        "type": "text",
+                        "text": SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 tools=tools,
-                messages=self._messages,
+                messages=_with_conversation_cache(self._messages),
             )
 
             usage = response.usage
@@ -380,6 +524,10 @@ class CopilotSession:
             turn.cost_usd += call_cost
             turn.input_tokens += getattr(usage, "input_tokens", 0) or 0
             turn.output_tokens += getattr(usage, "output_tokens", 0) or 0
+            turn.cache_read_tokens += getattr(usage, "cache_read_input_tokens", 0) or 0
+            turn.cache_write_tokens += (
+                getattr(usage, "cache_creation_input_tokens", 0) or 0
+            )
             turn.model_calls += 1
 
             self.audit.record(
@@ -393,6 +541,8 @@ class CopilotSession:
                     "model": getattr(response, "model", MODEL),
                     "input_tokens": turn.input_tokens,
                     "output_tokens": turn.output_tokens,
+                    "cache_read_tokens": turn.cache_read_tokens,
+                    "cache_write_tokens": turn.cache_write_tokens,
                     "cost_usd": round(call_cost, 6),
                     "session_total_usd": round(self.total_cost_usd, 6),
                 },
@@ -404,7 +554,9 @@ class CopilotSession:
                 turn.unsupported_reason = "model returned stop_reason=refusal"
                 break
 
-            self._messages.append({"role": "assistant", "content": response.content})
+            self._messages.append(
+                {"role": "assistant", "content": _blocks_to_dicts(response.content)}
+            )
 
             tool_uses = [b for b in response.content if b.type == "tool_use"]
             if not tool_uses:
@@ -419,6 +571,31 @@ class CopilotSession:
                 turn.stopped_early = (
                     f"reached the {MAX_TOOL_CALLS_PER_QUESTION}-tool-call ceiling "
                     "for one question without concluding"
+                )
+                # The assistant's tool_use blocks are already in the transcript.
+                # Breaking here without answering them would leave a dangling
+                # tool_use, and the API rejects that on the *next* request —
+                # which is how one question hitting this ceiling silently broke
+                # every later question in the session with a 400. Every exit
+                # from this loop must leave the transcript valid.
+                self._messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": json.dumps(
+                                    {
+                                        "refused": True,
+                                        "reason": turn.stopped_early,
+                                    }
+                                ),
+                                "is_error": True,
+                            }
+                            for block in tool_uses
+                        ],
+                    }
                 )
                 break
 
@@ -469,6 +646,8 @@ class CopilotSession:
                 amount=turn.cost_usd,
                 input_tokens=turn.input_tokens,
                 output_tokens=turn.output_tokens,
+                cache_read_tokens=turn.cache_read_tokens,
+                cache_write_tokens=turn.cache_write_tokens,
                 model_calls=turn.model_calls,
             ),
             extensions={
@@ -527,12 +706,12 @@ class CopilotSession:
         self._check_budget()
         # Replay sends one large gathered-evidence prompt; it needs the same
         # pre-flight refusal as the chat loop, for the same reason.
-        self._preflight(system, [{"role": "user", "content": user}])
+        allowed_tokens = self._preflight(system, [{"role": "user", "content": user}])
 
         response = self._ensure_client().messages.create(
             model=MODEL,
-            max_tokens=min(MAX_TOKENS_PER_TURN, MAX_TOKENS_CEILING),
-            output_config={"effort": EFFORT},
+            max_tokens=min(allowed_tokens, MAX_TOKENS_CEILING),
+            output_config={"effort": COPILOT_EFFORT},
             system=system,
             messages=[{"role": "user", "content": user}],
         )
@@ -549,6 +728,8 @@ class CopilotSession:
         turn.cost_usd = cost
         turn.input_tokens = getattr(usage, "input_tokens", 0) or 0
         turn.output_tokens = getattr(usage, "output_tokens", 0) or 0
+        turn.cache_read_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
+        turn.cache_write_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
         turn.model_calls = 1
 
         self.audit.record(
@@ -591,6 +772,8 @@ class CopilotSession:
                 amount=turn.cost_usd,
                 input_tokens=turn.input_tokens,
                 output_tokens=turn.output_tokens,
+                cache_read_tokens=turn.cache_read_tokens,
+                cache_write_tokens=turn.cache_write_tokens,
                 model_calls=turn.model_calls,
             ),
             extensions={"copilot": {"mode": mode, **(extensions or {})}},
@@ -637,6 +820,38 @@ class CopilotSession:
         else:
             turn.supported = True
             turn.unsupported_reason = None
+
+
+def _with_conversation_cache(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Put a cache breakpoint at the end of the settled conversation.
+
+    The transcript grows by append, so everything before the latest exchange is
+    byte-identical to the previous request and is cacheable. Marking the
+    second-to-last message means each turn re-reads the accumulated tool results
+    at the cache rate rather than the full input rate.
+
+    Returns a shallow copy: the caller's list must not gain `cache_control`
+    entries, or the breakpoint would drift as the conversation grows and
+    invalidate the prefix it is supposed to preserve.
+    """
+    if len(messages) < 2:
+        return messages
+
+    copied = [dict(m) for m in messages]
+    target = copied[-2]
+    content = target.get("content")
+    if isinstance(content, str):
+        target["content"] = [
+            {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+        ]
+    elif isinstance(content, list) and content:
+        blocks = [dict(b) if isinstance(b, dict) else b for b in content]
+        last = blocks[-1]
+        if isinstance(last, dict):
+            last["cache_control"] = {"type": "ephemeral"}
+            blocks[-1] = last
+            target["content"] = blocks
+    return copied
 
 
 _DECLINE_MARKERS = (

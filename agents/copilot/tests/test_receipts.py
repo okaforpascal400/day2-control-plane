@@ -424,3 +424,66 @@ def test_payload_digest_excludes_only_the_signature(chain) -> None:
 
     assert payload_digest(receipt) == digest(without)
     assert receipt["signature"]["payload_digest"] == payload_digest(receipt)
+
+
+def test_a_failed_replay_does_not_leave_a_flattering_receipt(tmp_path, key) -> None:
+    """The receipt must record the failure, not the default.
+
+    A live run produced a truncated JSON narration: the terminal correctly said
+    UNSUPPORTED while the signed receipt said `supported: true`, because the
+    early return skipped the re-sign. A receipt that flatters the system is
+    worse than no receipt.
+    """
+    import io
+    from pathlib import Path
+
+    from copilot.replay import run_replay
+    from copilot.runtime import CopilotSession
+    from day2_mcp.server import COPILOT_SCOPES, CopilotConfig, ToolRegistry
+
+    from day2_agents.audit import AuditLogger
+    from day2_agents.scopes import PermissionSet
+
+    class _Usage:
+        input_tokens = 100
+        output_tokens = 50
+        cache_creation_input_tokens = 0
+        cache_read_input_tokens = 0
+
+    class _Resp:
+        def __init__(self) -> None:
+            self.content = [type("B", (), {"type": "text", "text": "{not valid json"})()]
+            self.stop_reason = "end_turn"
+            self.usage = _Usage()
+            self.model = "claude-opus-5"
+
+    class _Msgs:
+        def create(self, **kw):
+            return _Resp()
+
+        def count_tokens(self, **kw):
+            return type("T", (), {"input_tokens": 100})()
+
+    class _Client:
+        messages = _Msgs()
+
+    audit = AuditLogger("t", "t", path=tmp_path / "a.jsonl", stream=io.StringIO())
+    scopes = PermissionSet.declare("t", COPILOT_SCOPES)
+    root = Path(__file__).resolve().parents[3]
+    session = CopilotSession(
+        registry=ToolRegistry(CopilotConfig(repo_root=root), scopes, audit),
+        audit=audit,
+        scopes=scopes,
+        client=_Client(),
+        signing_key=key,
+        budget_usd=5.0,
+    )
+
+    replay = run_replay(session, "2026-08-30T21:05:00Z", "2026-08-30T21:15:00Z")
+
+    assert replay.turn.supported is False
+    assert len(session.chain.receipts) == 1, "exactly one receipt per answer"
+    receipt = session.chain.receipts[-1]
+    assert receipt["answer"]["supported"] is False, "the receipt flattered the failure"
+    assert "not valid JSON" in receipt["answer"]["unsupported_reason"]
+    assert verify_receipt(receipt, "t", set()).passed
