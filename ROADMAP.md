@@ -1,8 +1,8 @@
 # ROADMAP — day2-control-plane
 
-> **Phase 4 complete. No phase is currently open.** Claude Code: only work the
-> current phase. Update checkboxes in the completing PR. Pascal approves phase
-> transitions — Phase 5 does not start until he says so.
+> **CURRENT: Phase 5 — CVE Response + Upgrade Agents.** Claude Code: only work
+> the current phase. Update checkboxes in the completing PR. Pascal approves
+> phase transitions — Phase 6 does not start until he says so.
 
 ## Phase 0 — Environment
 - [x] WSL2 Ubuntu relocated to external SSD (`D:\wsl`)
