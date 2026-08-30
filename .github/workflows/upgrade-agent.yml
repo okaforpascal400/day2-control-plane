@@ -1,0 +1,130 @@
+# Upgrade Agent — a Renovate PR in, a risk annotation out.
+#
+# Renovate tells you a newer version exists. It cannot tell you what that
+# version does to *your* code. This agent reads the bump, reads the release
+# notes Renovate already fetched into the PR body, greps this repository for
+# how we actually use the dependency, and posts one structured comment: risk
+# level, what changed upstream, which of our code paths it touches, and what
+# the reviewer should do. Full flow: agents/README.md.
+#
+# ---------------------------------------------------------------------------
+# WHY `pull_request_target`, AND WHY THAT IS SAFE HERE
+#
+# `pull_request` would run the workflow file *from the PR branch*. Renovate
+# bumps pinned GitHub Actions, so its PRs routinely touch `.github/workflows/`
+# — which means a `pull_request` trigger would let the contents of a PR change
+# the workflow that judges it, and that workflow holds `ANTHROPIC_API_KEY`.
+#
+# `pull_request_target` runs the workflow from the **default branch** instead,
+# so the agent's definition is always the reviewed one on `main`. That trigger
+# is dangerous in exactly one situation: checking out the PR's head and
+# executing it, which hands a stranger's code the secrets. This workflow never
+# does that. It checks out the base ref only, and the PR reaches the agent as
+# *data* — read through `gh api` and treated as untrusted text — never as code
+# that runs. The checkout below has no `ref:` for that reason; changing it to
+# check out the PR head would turn this into the vulnerability the pattern is
+# famous for.
+#
+# The agent is bounded on top of that: it declares `call_model`, `read_pr` and
+# `comment_on_pr`, and nothing else. It cannot push, open a PR, or merge.
+# ---------------------------------------------------------------------------
+#
+# Note the trigger types: `opened` and `reopened`, not `synchronize`. Renovate
+# force-pushes a PR when a newer version appears, and re-annotating on every
+# push would need the agent to read its own prior comments to avoid duplicating
+# them — a read it deliberately has no scope for. A superseded annotation is
+# left standing; re-run by hand with `workflow_dispatch` if it matters.
+name: upgrade-agent
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+  # Re-annotate a specific PR by hand — used for the Phase 5 seeded
+  # verification, and after a prompt change.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: The pull request number to annotate
+        required: true
+      simulate:
+        description: >-
+          Annotate even if the author is not a dependency bot (seeded
+          verification only; the bypass is recorded in the audit trail)
+        type: boolean
+        default: false
+
+# Least-privilege, and no new grant beyond what Phase 4 established.
+#
+#   contents: read       — check out the BASE ref to grep our own usage of the
+#                          dependency. Read-only: this agent writes no code and
+#                          has no scope that could push any.
+#   pull-requests: write — post the annotation comment. Note this does not
+#                          include merging (not a GitHub scope; refused in the
+#                          library) and does not include approving: the agent
+#                          comments on the `issues/{n}/comments` endpoint, not
+#                          the review endpoint, and `Action` has no approve
+#                          member to grant.
+#
+# Deliberately absent: `actions`, `issues`, `packages`, `id-token`, `checks`.
+permissions:
+  contents: read
+  pull-requests: write
+
+# One annotation per PR at a time.
+concurrency:
+  group: upgrade-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  annotate:
+    name: annotate upgrade risk
+    runs-on: ubuntu-24.04
+    # Dependency bots only, checked here before a runner does any work. The
+    # agent re-checks it itself — this is the cheap gate, not the real one.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(fromJSON('["renovate[bot]", "renovate-bot", "dependabot[bot]"]'),
+               github.event.pull_request.user.login)
+    timeout-minutes: 15
+
+    steps:
+      # NO `ref:`. The base branch, deliberately — see the header. The PR's
+      # content is read as data through `gh api`, never checked out or run.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: agents/core/requirements.txt
+
+      - name: Install the agent
+        run: pip install -r agents/core/requirements.txt
+
+      - name: Annotate
+        env:
+          # The only two credentials in play. Both scoped, neither written to
+          # disk (governance pillar 5).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          UPGRADE_PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+          UPGRADE_SIMULATE: ${{ inputs.simulate && '1' || '0' }}
+          UPGRADE_AUDIT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Outside the workspace: the trail is an artifact of the run, not a
+          # file in the checkout (Phase 4 defect 3).
+          DAY2_AUDIT_LOG: ${{ runner.temp }}/upgrade-audit.jsonl
+          PYTHONPATH: ${{ github.workspace }}/agents/core:${{ github.workspace }}/agents/upgrade
+        run: python -m upgrade.agent
+
+      - name: Upload audit trail
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: upgrade-audit-${{ github.event.pull_request.number || inputs.pr }}
+          path: ${{ runner.temp }}/upgrade-audit.jsonl
+          if-no-files-found: warn
+          retention-days: 90
