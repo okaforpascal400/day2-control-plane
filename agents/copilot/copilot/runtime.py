@@ -47,15 +47,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from day2_agents.audit import AuditLogger
-from day2_agents.claude import (
-    EFFORT,
-    MAX_TOKENS_CEILING,
-    MODEL,
-    ModelError,
-    compute_cost_usd,
-)
-from day2_agents.scopes import Action, PermissionSet
 from day2_mcp.server import ToolRegistry
 
 from copilot.receipts import (
@@ -66,6 +57,15 @@ from copilot.receipts import (
     SigningKey,
     load_or_create_key,
 )
+from day2_agents.audit import AuditLogger
+from day2_agents.claude import (
+    EFFORT,
+    MAX_TOKENS_CEILING,
+    MODEL,
+    ModelError,
+    compute_cost_usd,
+)
+from day2_agents.scopes import Action, PermissionSet
 
 AGENT_NAME = "day2-observability-copilot"
 AGENT_VERSION = "1.0"
@@ -297,9 +297,7 @@ class CopilotSession:
             turn.stopped_early = f"stopped after {MAX_TURNS} turns without concluding"
 
         if not turn.answer and turn.stopped_early:
-            turn.answer = (
-                "I stopped before reaching an answer: " + turn.stopped_early
-            )
+            turn.answer = "I stopped before reaching an answer: " + turn.stopped_early
 
         self._grade(turn)
         turn.elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -354,6 +352,98 @@ class CopilotSession:
         )
         return turn
 
+    def ask_raw(
+        self,
+        *,
+        question: str,
+        system: str,
+        user: str,
+        evidence: list[EvidenceEntry],
+        mode: str = "chat",
+        extensions: dict[str, Any] | None = None,
+    ) -> Turn:
+        """One model call over evidence that was already gathered.
+
+        The replay path uses this: its evidence is collected by code rather
+        than chosen by the model (see `replay.py` on why), so there is no loop
+        to run — just one narration call. It still goes through the same
+        budget check, the same audit entries and the same receipt chain, so a
+        replay is accounted for exactly like a chat answer.
+        """
+        self.scopes.require(Action.CALL_MODEL)
+        started = time.monotonic()
+        turn = Turn(question=question, evidence=list(evidence))
+        self._check_budget()
+
+        response = self._ensure_client().messages.create(
+            model=MODEL,
+            max_tokens=min(MAX_TOKENS_PER_TURN, MAX_TOKENS_CEILING),
+            output_config={"effort": EFFORT},
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+
+        usage = response.usage
+        cost = compute_cost_usd(
+            getattr(response, "model", MODEL),
+            getattr(usage, "input_tokens", 0) or 0,
+            getattr(usage, "output_tokens", 0) or 0,
+            getattr(usage, "cache_creation_input_tokens", 0) or 0,
+            getattr(usage, "cache_read_input_tokens", 0) or 0,
+        )
+        self.total_cost_usd += cost
+        turn.cost_usd = cost
+        turn.input_tokens = getattr(usage, "input_tokens", 0) or 0
+        turn.output_tokens = getattr(usage, "output_tokens", 0) or 0
+        turn.model_calls = 1
+
+        self.audit.record(
+            action="call_model",
+            target=question[:80],
+            decision_summary=(
+                f"copilot {mode} [{MODEL}, effort={EFFORT}, "
+                f"stop={getattr(response, 'stop_reason', None)}, ${cost:.4f}]"
+            ),
+            metadata={
+                "mode": mode,
+                "input_tokens": turn.input_tokens,
+                "output_tokens": turn.output_tokens,
+                "cost_usd": round(cost, 6),
+                "session_total_usd": round(self.total_cost_usd, 6),
+            },
+        )
+
+        if getattr(response, "stop_reason", None) == "refusal":
+            turn.answer = "The model declined this request."
+            turn.supported = False
+            turn.unsupported_reason = "model returned stop_reason=refusal"
+        else:
+            turn.answer = "".join(
+                b.text for b in response.content if b.type == "text"
+            ).strip()
+
+        turn.elapsed_ms = int((time.monotonic() - started) * 1000)
+        turn.receipt = self.chain.append(
+            model={"id": MODEL, "effort": EFFORT, "max_tokens": MAX_TOKENS_PER_TURN},
+            question=question,
+            evidence=turn.evidence,
+            answer=AnswerRecord(
+                text=turn.answer,
+                citations=turn.citations,
+                supported=turn.supported,
+                unsupported_reason=turn.unsupported_reason,
+            ),
+            cost=CostRecord(
+                amount=turn.cost_usd,
+                input_tokens=turn.input_tokens,
+                output_tokens=turn.output_tokens,
+                model_calls=turn.model_calls,
+            ),
+            extensions={"copilot": {"mode": mode, **(extensions or {})}},
+        )
+        self.turns.append(turn)
+        return turn
+
     # -- the cited-or-flagged rule ---------------------------------------
     def _grade(self, turn: Turn) -> None:
         """Decide whether the answer is supported by the evidence it cites."""
@@ -369,6 +459,10 @@ class CopilotSession:
         # flagging it as unsupported would punish exactly the right response.
         declines = _looks_like_a_decline(turn.answer)
 
+        if turn.unsupported_reason and not turn.supported:
+            # Already graded by the loop — a refusal, say — and that reason is
+            # more specific than anything this function would infer.
+            return
         if turn.stopped_early:
             turn.supported = False
             turn.unsupported_reason = turn.stopped_early
