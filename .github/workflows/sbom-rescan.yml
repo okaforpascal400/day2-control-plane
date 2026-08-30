@@ -27,6 +27,23 @@
 # shipped it (`sbom-<service>`, 90-day retention). Re-pulling a tag would ask a
 # subtly different question — "what does this tag resolve to today" — and a tag
 # can be overwritten. The SBOM cannot.
+#
+# It scans the **CycloneDX** copy, not the syft SPDX beside it, and that detail
+# is load-bearing rather than a preference. Measured on the `stale-base`
+# scenario, one image scanned four ways:
+#
+#     trivy image      -> 2 fixable HIGH   (the CI gate's own answer)
+#     syft SPDX        -> 0
+#     syft CycloneDX   -> 0
+#     trivy CycloneDX  -> 2
+#
+# Alpine advisories are keyed on the *source* package (`openssl`), not the
+# binary package (`libssl3`). Trivy's CycloneDX records that source name as a
+# property; syft records it only as an `upstream=` purl qualifier, which
+# trivy's SBOM decoder does not map back. Re-scanning the syft SBOM therefore
+# returns a confident, permanent zero — the worst possible failure for a
+# control whose entire job is to notice something. See the note in ci.yml
+# beside the step that generates it.
 name: sbom-rescan
 
 on:
@@ -46,6 +63,14 @@ on:
         default: false
       scenario_ref:
         description: Branch to scan instead of the last published SBOMs (seeded verification)
+        required: false
+      source_run:
+        description: >-
+          Take SBOMs from this exact ci run instead of the latest successful
+          one. Needed for seeded verification: a deliberately vulnerable image
+          makes ci go RED at the trivy gate, and ci.yml uploads the SBOM
+          artifact *before* that gate — so the evidence exists on a run that
+          "latest successful" would never select.
         required: false
 
 # Least-privilege. Three of these four are exactly what Phase 4 established for
@@ -109,12 +134,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SCAN_REF: ${{ inputs.scenario_ref || 'main' }}
+          PINNED_RUN: ${{ inputs.source_run }}
         run: |
-          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" \
-            --workflow ci.yml --branch "${SCAN_REF}" --status success \
-            --limit 1 --json databaseId --jq '.[0].databaseId')"
+          # An explicitly named run wins. Otherwise: the latest *successful* ci
+          # run, never merely the latest — a red run may have failed before the
+          # SBOM step and published nothing to re-scan.
+          if [ -n "${PINNED_RUN}" ]; then
+            run_id="${PINNED_RUN}"
+            echo "Using the explicitly named ci run ${run_id}"
+          else
+            run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" \
+              --workflow ci.yml --branch "${SCAN_REF}" --status success \
+              --limit 1 --json databaseId --jq '.[0].databaseId')"
+          fi
           if [ -z "${run_id}" ] || [ "${run_id}" = "null" ]; then
-            echo "::error::no successful ci run on ${SCAN_REF} to take SBOMs from"
+            echo "::error::no ci run on ${SCAN_REF} to take SBOMs from"
             exit 1
           fi
           echo "run_id=${run_id}" >>"$GITHUB_OUTPUT"
@@ -127,7 +161,13 @@ jobs:
           mkdir -p sboms
           gh run download "${{ steps.source.outputs.run_id }}" \
             --repo "${GITHUB_REPOSITORY}" --dir sboms --pattern 'sbom-*'
-          find sboms -name '*.spdx.json' -printf '%p (%s bytes)\n'
+          find sboms -name '*.json' -printf '%p (%s bytes)\n'
+          # The CycloneDX copy is the scannable one; see the header.
+          test -n "$(find sboms -name '*.cdx.json' -print -quit)" || {
+            echo '::error::no CycloneDX SBOM in that run — it predates the'\
+                 ' scannable-SBOM step in ci.yml; pick a newer run'
+            exit 1
+          }
 
       # Fresh DB every run — that is the entire point of the exercise. Note
       # `--exit-code 0`: a finding is this workflow's *input*, not its failure.
@@ -136,8 +176,8 @@ jobs:
       - name: Re-scan against fresh CVE data
         run: |
           mkdir -p findings
-          for sbom in sboms/*/sbom-*.spdx.json; do
-            service="$(basename "${sbom}" .spdx.json)"; service="${service#sbom-}"
+          for sbom in sboms/*/sbom-*.cdx.json; do
+            service="$(basename "${sbom}" .cdx.json)"; service="${service#sbom-}"
             echo "::group::trivy sbom ${service}"
             docker run --rm \
               -v "${PWD}:/work" -w /work \
