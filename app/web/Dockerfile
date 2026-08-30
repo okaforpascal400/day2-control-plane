@@ -27,10 +27,17 @@ COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 # CVE-2026-14456 (HIGH) — openssl: DoS via unbounded memory growth in the QUIC
 # server. libssl3/libcrypto3 3.5.7-r0 ship in nginx-unprivileged:1.31-alpine;
 # fixed in 3.5.8-r0. BRIDGE, not a fix: when a rebuilt base image carries
-# openssl >= 3.5.8-r0 the apk constraint is already satisfied, this RUN becomes
-# a no-op, and it should be removed together with a digest bump of NGINX_IMAGE.
+# openssl >= 3.5.8-r0 this RUN resolves to a no-op, and it should be removed
+# together with a digest bump of NGINX_IMAGE.
+#
+# Deliberately UNPINNED, and that is the whole point of the line. `=3.5.8-r0`
+# passes the gate today and then fails the build with apk exit 12 the moment
+# alpine supersedes that version — the index carries the current package, not a
+# back-catalogue — which is precisely the event the paragraph above says this
+# RUN should survive. Corrected from the agent's proposal; see agents/README.md,
+# "Phase 5 defects, found by running it", defect 4.
 USER root
-RUN apk add --no-cache --upgrade libssl3=3.5.8-r0 libcrypto3=3.5.8-r0
+RUN apk add --no-cache --upgrade libssl3 libcrypto3
 
 # The base image already runs as this unprivileged uid on port 8080.
 USER 101
