@@ -47,14 +47,14 @@
 name: sbom-rescan
 
 on:
-  # GATE — the schedule is deliberately commented out and is the go-live step.
-  # Uncommenting these two lines is the whole of "turn the daily rescan on",
-  # and it is a reviewed one-line diff rather than a setting with no history.
-  # A `schedule:` trigger only fires from the default branch, so this is inert
-  # until merged regardless; the comment makes the intent explicit anyway.
-  #
-  # schedule:
-  #   - cron: "17 6 * * *"   # 06:17 UTC daily, off the hour to dodge the stampede
+  # LIVE since the Phase 5 wrap. The gate that used to sit here — the schedule
+  # commented out, so that turning it on was a reviewed diff rather than a
+  # setting changed with no history — has been passed: the loop was exercised
+  # end to end on 2026-08-30 (seed -> red ci -> re-scan -> agent -> PR #25)
+  # before this line was uncommented. A `schedule:` trigger only fires from the
+  # default branch, so it starts on merge to main and not before.
+  schedule:
+    - cron: "17 6 * * *"   # 06:17 UTC daily, off the hour to dodge the stampede
   workflow_dispatch:
     inputs:
       dry_run:
