@@ -6,7 +6,7 @@
 # Bases pinned by digest per CLAUDE.md rule 2 — tags move, digests do not.
 # 1.31-alpine: the 1.27/1.29 lines still carry fixable HIGH CVEs in musl,
 # zlib, and nghttp2 that the trivy gate rejects.
-ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.31-alpine@sha256:18d67281256ded39ff65e010ae4f831be18f19356f83c60bc546492c7eb6dd23
+ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.31-alpine@sha256:901e944d1f4fc2bd077e8f5568b98c1f6f8cdacf6b97a87747c43134a339b9a7
 
 FROM ${NGINX_IMAGE} AS build
 
