@@ -36,11 +36,15 @@ MAX_TIMEOUT_SECONDS = 30.0
 # Per-tool result caps.
 MAX_SERIES = 200  # PromQL result series
 MAX_POINTS_PER_SERIES = 500  # samples in a range query
-MAX_LOG_LINES = 300
+MAX_LOG_LINES = 100
 MAX_ALERTS = 100
 MAX_COMMITS = 100
 MAX_FILE_BYTES = 256_000  # a runbook or dashboard file
-MAX_RESULT_BYTES = 400_000  # hard ceiling on any single serialised tool result
+# Sized for the *conversation*, not just for one response. A result is
+# re-sent on every later turn, so a 400KB result (the original figure) is
+# ~133k tokens of recurring cost. The first live run reached ~211k input
+# tokens this way. 40KB is roughly 13k tokens, which a transcript can carry.
+MAX_RESULT_BYTES = 40_000  # hard ceiling on any single serialised tool result
 
 
 class LimitExceeded(RuntimeError):

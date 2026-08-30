@@ -384,6 +384,13 @@ def run_replay(session: CopilotSession, start: str, end: str) -> Replay:
         turn.supported = False
         turn.unsupported_reason = f"replay narration was not valid JSON: {exc}"
         replay.summary = turn.answer
+        # Re-sign before returning. `ask_raw` has already appended a receipt
+        # that defaults to supported=True, and returning here without replacing
+        # it would leave a signed receipt claiming success for a replay that
+        # failed — a receipt that flatters the system, which is the one thing
+        # this artifact must never do. Found by a live run whose narration was
+        # truncated: the terminal said UNSUPPORTED and the receipt said true.
+        _rewrite_receipt(session, turn, replay)
         return replay
 
     replay.summary = str(parsed.get("summary", "")).strip()

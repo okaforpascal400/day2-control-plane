@@ -236,25 +236,29 @@ def test_the_loop_stops_after_max_turns(registry, audit, tmp_path) -> None:
 # --- the budget -------------------------------------------------------------
 
 
-def test_the_budget_stops_the_loop_mid_investigation(registry, audit, tmp_path) -> None:
-    """The cap must abort between turns, not report the bill afterwards."""
+def test_the_budget_is_never_exceeded_however_long_the_loop_runs(
+    registry, audit, tmp_path
+) -> None:
+    """The invariant the first live run broke: spend must not pass the cap.
+
+    The original version of this test asserted only that the loop stopped
+    early, which was true while the session still overspent 2.4x. What has to
+    hold is the cap itself.
+    """
     many = [
         _Response(
             [tool_use("read_runbook", {"path": None}, f"t{i}")], stop_reason="tool_use"
         )
         for i in range(MAX_TURNS)
     ]
-    # 1000 in + 200 out on opus-5 = $0.005 + $0.005 = $0.010 per call. The
-    # budget allows the question to start (worst case for one call is ~$0.05 of
-    # output plus a small input estimate) but not to run to MAX_TURNS.
     session = make_session(registry, audit, many, tmp_path, budget=0.10)
 
     turn = session.ask("expensive question")
 
-    assert turn.model_calls < MAX_TURNS, "should have stopped early"
-    assert not turn.supported
-    assert "cap" in turn.unsupported_reason
-    assert session.total_cost_usd <= 0.10, "the cap must not be exceeded"
+    assert session.total_cost_usd <= 0.10, (
+        f"cap breached: ${session.total_cost_usd:.4f} of $0.10"
+    )
+    assert turn.stopped_early or turn.answer
 
 
 def test_a_second_question_past_the_cap_is_refused_before_any_call(
@@ -520,22 +524,46 @@ def test_a_call_that_would_breach_the_cap_is_never_sent(
     assert session._client.messages.requests == [], "a request was sent despite the cap"
 
 
-def test_the_preflight_estimate_accounts_for_worst_case_output(
+def test_a_tight_budget_shortens_the_answer_before_it_refuses(
     registry, audit, tmp_path
 ) -> None:
-    """Worst case is knowable: max_tokens is a hard ceiling on the response."""
-    from copilot.runtime import MAX_TOKENS_PER_TURN
+    """The cap spends its budget rather than rejecting on worst case.
+
+    Refusing whenever the *maximum* response would breach the cap makes the
+    cap unusable — it rejects calls that would in fact have cost a fraction of
+    the ceiling. Buying the largest answer still affordable keeps the cap hard
+    (the worst case is priced before sending either way) and keeps it useful.
+    """
+    from copilot.runtime import (
+        MAX_TOKENS_PER_TURN,
+        MIN_OUTPUT_TOKENS,
+        OUTPUT_OVERRUN_FACTOR,
+    )
 
     session = make_session(registry, audit, [], tmp_path, budget=0.50)
-    estimated = session.estimate_input_tokens("sys", [{"role": "user", "content": "hi"}])
+    messages = [{"role": "user", "content": "hi"}]
 
-    # Output alone at the cap must be part of the estimate.
-    output_only = MAX_TOKENS_PER_TURN * 25.00 / 1_000_000
-    session.total_cost_usd = 0.50 - output_only + 0.0001
+    generous = session._preflight("sys", messages)
+    assert generous == MAX_TOKENS_PER_TURN, "a fresh budget buys the full ceiling"
 
-    with pytest.raises(BudgetExceeded):
+    # Leave room for roughly 800 output tokens, priced with the thinking
+    # overrun the way the pre-flight prices it.
+    room = 800 * OUTPUT_OVERRUN_FACTOR * 25.00 / 1_000_000
+    session.total_cost_usd = 0.50 - room - 0.02
+    tightened = session._preflight("sys", messages)
+
+    assert MIN_OUTPUT_TOKENS <= tightened < MAX_TOKENS_PER_TURN, (
+        "a tight budget should shorten the answer, not refuse it"
+    )
+
+
+def test_below_the_output_floor_the_call_is_refused(registry, audit, tmp_path) -> None:
+    """An answer too short to be worth truncating into is not attempted."""
+    session = make_session(registry, audit, [], tmp_path, budget=0.50)
+    session.total_cost_usd = 0.4999
+
+    with pytest.raises(BudgetExceeded, match="Nothing was sent"):
         session._preflight("sys", [{"role": "user", "content": "hi"}])
-    assert estimated > 0
 
 
 def test_the_estimate_errs_high_rather_than_low(registry, audit, tmp_path) -> None:
@@ -634,6 +662,39 @@ def test_trimming_keeps_the_tool_result_blocks_the_api_requires(
     assert ids_before == ids_after, "every tool_use must keep a matching tool_result"
 
 
+def test_a_trimmed_result_carries_no_keys_the_api_would_reject(
+    registry, audit, tmp_path
+) -> None:
+    """A live 400 taught this: `tool_result._trimmed: Extra inputs are not
+    permitted`. Bookkeeping must not live inside the block."""
+    session = make_session(registry, audit, [], tmp_path)
+    bulky = json.dumps(
+        {"citation_id": "loki:1", "entries": ["y" * 500 for _ in range(200)]}
+    )
+    for i in range(8):
+        session._messages.append(
+            {"role": "assistant", "content": [tool_use("search_logs", {}, f"t{i}")]}
+        )
+        session._messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": f"t{i}", "content": bulky}
+                ],
+            }
+        )
+
+    session._trim_transcript()
+
+    allowed = {"type", "tool_use_id", "content", "is_error", "cache_control"}
+    for message in session._messages:
+        if not isinstance(message.get("content"), list):
+            continue
+        for block in message["content"]:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                assert set(block) <= allowed, f"illegal keys: {set(block) - allowed}"
+
+
 def test_a_trimmed_result_keeps_its_citation_id(registry, audit, tmp_path) -> None:
     """The model must still be able to cite evidence whose payload was dropped."""
     session = make_session(registry, audit, [], tmp_path)
@@ -668,3 +729,70 @@ def test_the_tool_call_ceiling_stops_over_investigation(
 
     assert len(turn.evidence) <= MAX_TOOL_CALLS_PER_QUESTION
     assert turn.stopped_early
+
+
+def test_every_loop_exit_leaves_a_valid_transcript(registry, audit, tmp_path) -> None:
+    """A live 400 taught this one.
+
+    When a question hit the tool-call ceiling the loop broke straight after
+    appending the assistant's `tool_use` blocks, leaving them unanswered. The
+    API rejects that on the *next* request, so one question hitting the ceiling
+    silently broke every later question in the session — the symptom appeared
+    nowhere near the cause.
+    """
+    from copilot.runtime import MAX_TOOL_CALLS_PER_QUESTION, _has_dangling_tool_use
+
+    many = [
+        _Response(
+            [tool_use("read_runbook", {"path": None}, f"t{i}")], stop_reason="tool_use"
+        )
+        for i in range(MAX_TURNS)
+    ]
+    session = make_session(registry, audit, many, tmp_path, budget=100.0)
+
+    turn = session.ask("investigate everything")
+
+    assert turn.stopped_early, "fixture should hit the ceiling"
+    assert len(turn.evidence) <= MAX_TOOL_CALLS_PER_QUESTION
+    assert _has_dangling_tool_use(session._messages) == [], (
+        "the transcript was left with unanswered tool_use blocks"
+    )
+
+
+def test_a_later_question_still_works_after_one_hits_the_ceiling(
+    registry, audit, tmp_path
+) -> None:
+    """The actual regression: question 2 must not inherit question 1's damage."""
+    from copilot.runtime import _has_dangling_tool_use
+
+    responses = [
+        _Response(
+            [tool_use("read_runbook", {"path": None}, f"t{i}")], stop_reason="tool_use"
+        )
+        for i in range(MAX_TURNS)
+    ]
+    responses.append(_Response([text("The data does not show this.")]))
+    session = make_session(registry, audit, responses, tmp_path, budget=100.0)
+
+    session.ask("first question that over-investigates")
+    second = session.ask("second question")
+
+    assert _has_dangling_tool_use(session._messages) == []
+    assert second.answer, "the second question produced no answer"
+    assert len(session.chain.receipts) == 2
+
+
+def test_the_dangling_detector_finds_an_unanswered_tool_use() -> None:
+    from copilot.runtime import _has_dangling_tool_use
+
+    broken = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1"}]},
+    ]
+    answered = [
+        *broken,
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]},
+    ]
+
+    assert _has_dangling_tool_use(broken) == ["t1"]
+    assert _has_dangling_tool_use(answered) == []
