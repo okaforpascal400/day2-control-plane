@@ -1,9 +1,8 @@
 # ROADMAP — day2-control-plane
 
-> **Phase 5 is complete. NEXT: Phase 6 — MCP Server + Observability Copilot,
-> not started.** Claude Code: only work the current phase. Update checkboxes in
-> the completing PR. Pascal approves phase transitions — Phase 6 does not start
-> until he says so.
+> **CURRENT: Phase 6 — MCP Server + Observability Copilot.** Claude Code: only
+> work the current phase. Update checkboxes in the completing PR. Pascal
+> approves phase transitions — Phase 7 does not start until he says so.
 
 ## Phase 0 — Environment
 - [x] WSL2 Ubuntu relocated to external SSD (`D:\wsl`)
