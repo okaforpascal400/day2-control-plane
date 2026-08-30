@@ -1,8 +1,9 @@
 # ROADMAP — day2-control-plane
 
-> **CURRENT: Phase 5 — CVE Response + Upgrade Agents.** Claude Code: only work
-> the current phase. Update checkboxes in the completing PR. Pascal approves
-> phase transitions — Phase 6 does not start until he says so.
+> **Phase 5 is complete. NEXT: Phase 6 — MCP Server + Observability Copilot,
+> not started.** Claude Code: only work the current phase. Update checkboxes in
+> the completing PR. Pascal approves phase transitions — Phase 6 does not start
+> until he says so.
 
 ## Phase 0 — Environment
 - [x] WSL2 Ubuntu relocated to external SSD (`D:\wsl`)
@@ -62,24 +63,52 @@
       fallback when `gh pr create` fails) in PR #17. See the demo record in
       `agents/README.md`.
 
-## Phase 5 — CVE Response + Upgrade Agents
-- [ ] Daily SBOM re-scan; CVE agent -> patch PR + blast radius
+## Phase 5 — CVE Response + Upgrade Agents  ✅ COMPLETE
+- [x] Daily SBOM re-scan; CVE agent -> patch PR + blast radius
       Live on 2026-08-30 from the `stale-base` seed ([#24](https://github.com/okaforpascal400/day2-control-plane/pull/24)): red
-      `ci` -> re-scan of that run's SBOMs -> 1 CVE across 2 packages in `web`
-      -> verified diff -> [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25), **$0.1350**. The agent
-      rediscovered `4799195`'s remediation with the naming comment stripped,
-      and refused the moved-digest shortcut. Not ticked: the `schedule:`
-      trigger is still commented out, so the *daily* part is designed and not
-      yet deployed, and #25 is unmerged pending the defect-4 correction.
-- [ ] Renovate + Upgrade Agent PR risk annotations
+      `ci` ([33324677924](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324677924)) -> re-scan of that
+      run's SBOMs ([33324812354](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324812354)) -> 1 CVE across
+      2 packages in `web` -> `verify_fix` build + trivy gate -> branch ->
+      [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25), **$0.1350**, `cve-audit-33324812354`. The agent
+      rediscovered `4799195`'s remediation with the naming comment stripped, and
+      refused the moved-digest shortcut. Blast radius discriminated: `api` and
+      `worker` re-scanned clean, only `web` was reported.
+      **The `schedule:` trigger is uncommented in this PR** — 06:17 UTC daily —
+      so the *daily* part goes from designed to deployed on merge. It was held
+      behind a reviewed diff until the loop had run end to end, which it now has.
+      #24 and #25 are closed unmerged on purpose: #24 was the seed and was
+      reverted, and the correction the run actually earned (defect 4) landed as
+      [#27](https://github.com/okaforpascal400/day2-control-plane/pull/27) against the agent's guardrail rather than as the
+      agent's own patch.
+- [x] Renovate + Upgrade Agent PR risk annotations
       Live on 2026-08-30 against [#19](https://github.com/okaforpascal400/day2-control-plane/pull/19), a real `renovate[bot]` PR
-      annotated without the `simulate` bypass — medium risk, **$0.0731**. Two
-      accuracy defects in the annotation are recorded in `agents/README.md`.
-      Not ticked: it has annotated one PR, on the `workflow_dispatch` path; the
-      `pull_request_target` trigger has not fired on its own yet.
+      annotated without the `simulate` bypass — medium risk, `review`,
+      **$0.0731**, `upgrade-audit-19`. It reached the digest rule independently
+      of the CVE agent, and was right on the facts. Two accuracy defects in the
+      annotation are recorded in `agents/README.md` rather than left standing.
+      The `pull_request_target` trigger **is** live and has fired unprompted
+      four times — the fourth on the Phase 5 wrap PR itself
+      ([33327253751](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33327253751)), skipped at the author
+      gate while the diff describing it was under review. The first three:
+      [33324677873](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324677873),
+      [33325450487](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33325450487),
+      [33326274181](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33326274181) — skipping each at the
+      author gate because the PR was human-authored. What it has not yet had is
+      a `renovate[bot]` PR *opened* since the workflow landed on `main` — the
+      three open Renovate PRs all predate it, which is why #19 was annotated by
+      `workflow_dispatch`. Deployed and exercised; awaiting its natural trigger.
+- Phase 5 cost, read out of the audit artifacts and not estimated: **$0.4888**
+  across four live runs — CVE $0.1350, Upgrade $0.0731, and two Triage runs at
+  $0.1127 and $0.1680 that both correctly *withheld* a fix. `approved_by: null`
+  on every entry. Running total across Phases 4-5: **$0.7370**.
 - Four defects found by running the pipeline, the fourth in the agent's own
   proposed diff and fixed in [#27](https://github.com/okaforpascal400/day2-control-plane/pull/27) — `agents/README.md`,
   "Phase 5 defects, found by running it".
+- Carried out of the phase: [#28](https://github.com/okaforpascal400/day2-control-plane/issues/28) — `CVE-2026-14456` blocks the
+  `python:3.12-slim` bump in [#23](https://github.com/okaforpascal400/day2-control-plane/pull/23) for `api` and `worker`. A real
+  finding on a *proposed* digest, caught by the `ci` trivy gate, not by the
+  re-scan; `main`'s published images are verified unaffected. The bump is also a
+  Debian 12 -> 13 jump wearing a digest bump's clothes.
 
 ## Phase 6 — MCP Server + Observability Copilot
 - [ ] Read-only MCP: query_prometheus, search_logs, get_dashboard, read_runbook, git_history

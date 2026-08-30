@@ -760,23 +760,72 @@ each. What that does and does not cover:
 * **Upgrade — live, against a real Renovate PR.** [#19](https://github.com/okaforpascal400/day2-control-plane/pull/19) is
   genuinely authored by `renovate[bot]`, so the `simulate` bypass was not used
   and the author gate was exercised rather than stepped around.
-* **Not covered: the daily schedule.** The `schedule:` trigger in
-  `sbom-rescan.yml` is still commented out — going live is deliberately a
-  reviewed one-line diff rather than a setting with no history. Every run so
-  far has been `workflow_dispatch`, so "found within a day" is a property of
-  the design, not yet of the deployment.
+* **Upgrade — the `pull_request_target` trigger has fired on its own.** Four
+  times, unprompted — including on the wrap PR that records this, which the
+  trigger skipped at the author gate while the diff describing it was under
+  review ([33327253751](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33327253751)). The first three were
+  on [#24](https://github.com/okaforpascal400/day2-control-plane/pull/24)
+  ([33324677873](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324677873)), the demo-record PR
+  ([33325450487](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33325450487)) and #27
+  ([33326274181](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33326274181)) — each skipped at the
+  job-level author gate because the PR was human-authored. So the deployed
+  trigger works and the cheap gate declines correctly on the live path. What it
+  has **not** had is a `renovate[bot]` PR *opened* since the workflow reached
+  `main`: all three open Renovate PRs (#19, #20, #23) predate it, and
+  `types: [opened, reopened]` deliberately excludes the `synchronize` events
+  their rebases produce. That is why #19 needed `workflow_dispatch`.
+* **The daily schedule is now on.** The `schedule:` trigger in
+  `sbom-rescan.yml` was uncommented in the Phase 5 wrap PR, after the loop had
+  been run end to end — going live was deliberately a reviewed diff rather than
+  a setting changed with no history. It fires at 06:17 UTC from `main`. Every
+  run *before* that was `workflow_dispatch`, so "found within a day" became a
+  property of the deployment only at the wrap, and its first unattended runs
+  are still ahead of it.
+
+  What that first run will report is **nothing**, and that is the correct
+  answer rather than a miss. Re-scanning the CycloneDX SBOMs published by the
+  last green `main` run ([33326382715](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33326382715)) — same
+  input, scanner and filter the schedule uses — returns zero fixable
+  HIGH/CRITICAL on all three images (`api` and `worker` on debian 12.15, `web`
+  on alpine 3.24.1). The gate held at publish and nothing has been disclosed
+  against them since.
+
+  The live `CVE-2026-14456` finding on `python:3.12-slim`
+  ([#28](https://github.com/okaforpascal400/day2-control-plane/issues/28)) is **not** a test of this loop, and it is worth being
+  precise about why. That CVE exists only on the digest *proposed* by Renovate
+  [#23](https://github.com/okaforpascal400/day2-control-plane/pull/23), never on a published image, so it was caught by the `ci`
+  trivy gate on the PR — the control that owns proposed changes — and the
+  re-scan, which owns shipped artefacts, will correctly stay silent on it. Two
+  controls, two surfaces. Reading the schedule's silence as a failure to notice
+  #28 would be the wrong lesson from the right behaviour.
 * **Not covered: the diagnosis-only issue ending.** The CVE agent declares
   `open_issue` and holds the scope, but this finding reached `fix_pr`. Of its
   three endings, one has been taken live.
 * **Not covered: `pin_bump` and `base_image_bump`.** The one live finding was
   an OS package in a base image, and the agent reasoned its way to
   `apk_upgrade_bridge`. The other two remediation shapes remain test-covered
-  only.
-* **Nothing is merged.** [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25) is open pending the defect-4
-  correction, and CI has not run on `agent/cve-2026-14456`: GitHub does not
-  trigger workflows for events created with `GITHUB_TOKEN`, which is the only
-  credential the agent holds. The green run has to be started by a human, and
-  that is a property of the design rather than an oversight.
+  only. [#28](https://github.com/okaforpascal400/day2-control-plane/issues/28) is a `base_image_bump`-shaped problem in the
+  wild — wait for upstream to republish `python:3.12-slim` rather than bridge
+  it — but it was written by a human, so it is an illustration of the shape and
+  not coverage of the agent producing it.
+* **The agent's own PR was closed, not merged — and that is the right
+  outcome.** [#25](https://github.com/okaforpascal400/day2-control-plane/pull/25) patched a vulnerability that only existed
+  because [#24](https://github.com/okaforpascal400/day2-control-plane/pull/24) seeded it; reverting the seed removed the thing
+  the patch fixed, so merging the patch would have re-applied a bridge `main`
+  already carries from `4799195`. What the run actually earned was the
+  defect-4 correction, and that landed against the *guardrail* as
+  [#27](https://github.com/okaforpascal400/day2-control-plane/pull/27) — so the agent cannot propose an exact-pinned bridge
+  again — rather than as the agent's own diff.
+
+  CI has since run on `agent/cve-2026-14456`, which the earlier note said it
+  had not. The corrected commit `4d06897` went **green**
+  ([33326042079](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33326042079)); the run on the agent's
+  original commit `c334cda`
+  ([33324904561](https://github.com/okaforpascal400/day2-control-plane/actions/runs/33324904561)) failed at the workflow level
+  with zero jobs, so it is not a verdict on the diff either way. The underlying
+  constraint still stands and still shapes the design: GitHub does not trigger
+  workflows for events created with `GITHUB_TOKEN`, the only credential the
+  agent holds, so a green run on an agent branch is always started by a human.
 
 ### Phase 4 scenario coverage, stated exactly
 
