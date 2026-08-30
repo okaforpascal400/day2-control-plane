@@ -1,0 +1,234 @@
+# Daily SBOM re-scan -> CVE Response Agent.
+#
+# The published images do not change, but the CVE database does. CI scans an
+# image once, at build time, and gates on it; this workflow re-asks the same
+# question every morning against fresh vulnerability data, so a CVE disclosed
+# after publish is found in a day rather than at the next unrelated commit.
+#
+# ---------------------------------------------------------------------------
+# WHY A FINDING HERE IS ALWAYS *NEW*, WITH NO STATE FILE
+#
+# `ci.yml` publishes an image only after `trivy image --severity HIGH,CRITICAL
+# --ignore-unfixed --exit-code 1` passes. So every published image had **zero**
+# fixable HIGH/CRITICAL findings at the moment it was published. That is the
+# baseline, and it is enforced by a gate rather than recorded in a file that
+# could drift: anything this workflow finds under the identical filter was
+# either disclosed since publish, or became fixable since publish. No
+# "previously seen" ledger to keep, and no chance of one going stale.
+#
+# Dedupe across *days* is a different problem — the same CVE is still there
+# tomorrow — and it is not solved here. It is solved in the agent, by searching
+# the repo's own open PRs and issues for the CVE id before filing anything.
+# GitHub's issue state is the ledger; the agent keeps none of its own.
+# ---------------------------------------------------------------------------
+#
+# Scanning the stored SBOM rather than re-pulling the image is deliberate. The
+# SBOM is the bill of materials we actually shipped, recorded by the run that
+# shipped it (`sbom-<service>`, 90-day retention). Re-pulling a tag would ask a
+# subtly different question — "what does this tag resolve to today" — and a tag
+# can be overwritten. The SBOM cannot.
+name: sbom-rescan
+
+on:
+  # GATE — the schedule is deliberately commented out and is the go-live step.
+  # Uncommenting these two lines is the whole of "turn the daily rescan on",
+  # and it is a reviewed one-line diff rather than a setting with no history.
+  # A `schedule:` trigger only fires from the default branch, so this is inert
+  # until merged regardless; the comment makes the intent explicit anyway.
+  #
+  # schedule:
+  #   - cron: "17 6 * * *"   # 06:17 UTC daily, off the hour to dodge the stampede
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Scan and report findings, but do not run the agent
+        type: boolean
+        default: false
+      scenario_ref:
+        description: Branch to scan instead of the last published SBOMs (seeded verification)
+        required: false
+
+# Least-privilege. Three of these four are exactly what Phase 4 established for
+# `triage-agent.yml`; `issues: write` is the one addition, and it exists solely
+# for the diagnosis-only path.
+#
+#   actions: read       — list ci runs and download the SBOM artifacts they
+#                         produced. Read-only: the agent must not be able to
+#                         re-run, cancel or delete a run.
+#   contents: write     — create and push the fix branch. `main` is refused
+#                         twice over in agents/core/guardrails.py, and branch
+#                         protection is the platform-side backstop.
+#   pull-requests: write— open the remediation PR. Not merge: merging is not a
+#                         GitHub scope, so the refusal lives in the library
+#                         (GitHubHelper.merge_pull_request always raises).
+#   issues: write       — file the diagnosis-only issue when there is no clean
+#                         remediation, and read open issues to dedupe. A
+#                         speculative PR is worse than an honest issue, so this
+#                         is the grant that makes "no fix" a first-class ending
+#                         rather than silence.
+#
+# Deliberately absent: `packages` (the images are public — the rescan reads a
+# stored SBOM and never pulls from GHCR), `id-token`, `security-events`,
+# `checks`, `deployments`.
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  issues: write
+
+# One rescan at a time. Not cancel-in-progress: a half-finished response would
+# leave a pushed branch with no PR explaining it — the Phase 4 defect-2 shape.
+concurrency:
+  group: sbom-rescan
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Same digest-pinned scanner ci.yml gates with, so the rescan and the gate
+  # cannot drift onto different scanner behaviour (CLAUDE.md rule 2).
+  TRIVY_IMAGE: aquasec/trivy@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
+
+jobs:
+  rescan:
+    name: rescan SBOMs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      findings: ${{ steps.collect.outputs.findings }}
+      source_run: ${{ steps.source.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.scenario_ref || github.ref }}
+
+      # The SBOMs to re-scan are the ones the last *successful* ci run on the
+      # scanned ref produced. Not "the latest run" — a red run may have failed
+      # before the SBOM step and published nothing.
+      - name: Resolve the source ci run
+        id: source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCAN_REF: ${{ inputs.scenario_ref || 'main' }}
+        run: |
+          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" \
+            --workflow ci.yml --branch "${SCAN_REF}" --status success \
+            --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [ -z "${run_id}" ] || [ "${run_id}" = "null" ]; then
+            echo "::error::no successful ci run on ${SCAN_REF} to take SBOMs from"
+            exit 1
+          fi
+          echo "run_id=${run_id}" >>"$GITHUB_OUTPUT"
+          echo "Re-scanning SBOMs from ci run ${run_id} (${SCAN_REF})"
+
+      - name: Download the published SBOMs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p sboms
+          gh run download "${{ steps.source.outputs.run_id }}" \
+            --repo "${GITHUB_REPOSITORY}" --dir sboms --pattern 'sbom-*'
+          find sboms -name '*.spdx.json' -printf '%p (%s bytes)\n'
+
+      # Fresh DB every run — that is the entire point of the exercise. Note
+      # `--exit-code 0`: a finding is this workflow's *input*, not its failure.
+      # The identical severity filter to ci.yml's gate is what makes the
+      # zero-baseline argument in the header hold.
+      - name: Re-scan against fresh CVE data
+        run: |
+          mkdir -p findings
+          for sbom in sboms/*/sbom-*.spdx.json; do
+            service="$(basename "${sbom}" .spdx.json)"; service="${service#sbom-}"
+            echo "::group::trivy sbom ${service}"
+            docker run --rm \
+              -v "${PWD}:/work" -w /work \
+              -v "${HOME}/.cache/trivy:/root/.cache/trivy" \
+              "${TRIVY_IMAGE}" sbom \
+                --severity HIGH,CRITICAL \
+                --ignore-unfixed \
+                --exit-code 0 \
+                --format json \
+                --output "findings/${service}.json" \
+                "${sbom}"
+            echo "::endgroup::"
+          done
+
+      # One flat list, annotated with the service and the image layer each
+      # finding came from — the agent needs "which of our images ships this"
+      # before it can say anything true about blast radius.
+      - name: Collect new findings
+        id: collect
+        run: |
+          python3 scripts/collect_cve_findings.py findings >cve-findings.json
+          count="$(python3 -c 'import json;print(len(json.load(open("cve-findings.json"))["findings"]))')"
+          echo "findings=${count}" >>"$GITHUB_OUTPUT"
+          {
+            echo "## SBOM re-scan"
+            echo
+            echo "Source ci run: ${{ steps.source.outputs.run_id }}"
+            echo
+            echo "**${count}** fixable HIGH/CRITICAL finding(s) not present at publish time."
+          } >>"$GITHUB_STEP_SUMMARY"
+          python3 -c 'import json;[print("-", f["cve"], f["package"], f["installed"], "->", f["fixed"], f["service"]) for f in json.load(open("cve-findings.json"))["findings"]]'
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cve-findings-${{ github.run_id }}
+          path: |
+            cve-findings.json
+            findings/
+          if-no-files-found: warn
+          retention-days: 90
+
+  respond:
+    name: CVE response agent
+    needs: rescan
+    # No findings, no agent, no model call, no cost. Most days this is where
+    # the workflow ends.
+    if: needs.rescan.outputs.findings != '0' && !inputs.dry_run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.scenario_ref || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: agents/core/requirements.txt
+
+      - name: Install the agent
+        run: pip install -r agents/core/requirements.txt
+
+      - name: Download findings
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cve-findings-${{ github.run_id }}
+
+      - name: Respond
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CVE_FINDINGS: ${{ github.workspace }}/cve-findings.json
+          CVE_BASE_REF: ${{ inputs.scenario_ref || 'main' }}
+          CVE_SOURCE_RUN: ${{ needs.rescan.outputs.source_run }}
+          CVE_AUDIT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Outside the workspace, so the trail can never be staged into the
+          # agent's own proposal (Phase 4 defect 3).
+          DAY2_AUDIT_LOG: ${{ runner.temp }}/cve-audit.jsonl
+          PYTHONPATH: ${{ github.workspace }}/agents/core:${{ github.workspace }}/agents/cve-response
+        run: python -m cve_response.agent
+
+      - name: Upload audit trail
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cve-audit-${{ github.run_id }}
+          path: ${{ runner.temp }}/cve-audit.jsonl
+          if-no-files-found: warn
+          retention-days: 90
