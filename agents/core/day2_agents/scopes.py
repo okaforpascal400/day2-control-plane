@@ -25,6 +25,13 @@ class Action(StrEnum):
     be reviewed as such. Note what is *absent*: there is no merge, no release,
     no deploy, no delete. Those are not scopes an agent can be granted with a
     config change — they simply do not exist here.
+
+    Note also what `COMMENT_ON_PR` is not. Commenting on a pull request is the
+    weakest write GitHub offers: it adds a message to a thread and changes
+    neither the code nor the PR's state. It is deliberately a separate member
+    from `COMMENT_ON_RUN` rather than a reuse of it, so an agent granted one
+    does not silently hold the other and the audit trail names the surface that
+    was actually written to.
     """
 
     CALL_MODEL = "call_model"
@@ -33,6 +40,13 @@ class Action(StrEnum):
     PUSH_COMMIT = "push_commit"
     OPEN_PR = "open_pr"
     COMMENT_ON_RUN = "comment_on_run"
+
+    # Added in Phase 5, for the CVE Response and Upgrade agents. Each one is a
+    # read or a *proposal*; none of them is a new way to change the repository,
+    # which is why the absences above still hold.
+    READ_PR = "read_pr"  # read a pull request and its diff, and list open ones
+    OPEN_ISSUE = "open_issue"  # file a diagnosis when there is no clean fix
+    COMMENT_ON_PR = "comment_on_pr"  # annotate someone else's PR, in its thread
 
 
 class PermissionDenied(RuntimeError):

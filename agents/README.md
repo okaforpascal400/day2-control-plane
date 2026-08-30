@@ -1,8 +1,9 @@
 # Agents
 
-Governed AI agents for this control plane. Phase 4 ships the shared library
-(`core`) and the first agent that uses it (`triage`); Phases 5-7 add the CVE
-Response, Upgrade, Copilot, DR Drill and Audit agents on the same foundation.
+Governed AI agents for this control plane. Phase 4 shipped the shared library
+(`core`) and the first agent that uses it (`triage`); Phase 5 adds the CVE
+Response and Upgrade agents on the same foundation, and Phases 6-7 add the
+Copilot, DR Drill and Audit agents.
 
 The organising rule is CLAUDE.md rule 3 — **agents propose, humans approve**.
 Everything below exists to make that true by construction rather than by
@@ -11,10 +12,38 @@ path by which it could".
 
 ```
 agents/
-  core/       day2_agents/  the shared library — every agent goes through it
-  triage/     triage/       Phase 4: failed CI run -> diagnosis -> fix PR
-  cve-response/ upgrade/ copilot/ dr-drill/ audit/    Phases 5-7
+  core/          day2_agents/    the shared library — every agent goes through it
+  triage/        triage/         Phase 4: failed CI run   -> diagnosis -> fix PR
+  cve-response/  cve_response/   Phase 5: new CVE         -> verified fix PR / issue
+  upgrade/       upgrade/        Phase 5: Renovate PR     -> risk annotation
+  copilot/ dr-drill/ audit/                              Phases 6-7
 ```
+
+## The three agents at a glance
+
+Read this table as a permission budget. Every row is what `agents/core` will
+let that agent do, and nothing outside it is reachable — not by prompt, not by
+configuration, not by a model that decides it would be helpful.
+
+| | Triage | CVE Response | Upgrade |
+|---|---|---|---|
+| Trigger | `ci` run fails | daily SBOM re-scan finds a new HIGH/CRITICAL | Renovate opens a PR |
+| `call_model` | yes | yes | yes |
+| `read_ci_run` | yes | — | — |
+| `read_pr` | — | yes (dedupe) | yes |
+| `create_branch` / `push_commit` | yes (`triage/*`) | yes (`agent/*`) | **no** |
+| `open_pr` | yes | yes | **no** |
+| `open_issue` | — | yes | **no** |
+| `comment_on_run` | yes | — | — |
+| `comment_on_pr` | — | — | yes |
+| Merge / approve | **refused in the library, for all three** | | |
+| Writes code? | yes, as a proposal | yes, as a proposal | **never** |
+
+The Upgrade agent's column is the interesting one: it holds three scopes and
+none of them can change the repository. "It never pushes code" is therefore not
+a rule it follows — it is a capability it does not have, and
+`upgrade/tests/test_agent.py` asserts exactly that by calling every write on a
+helper carrying its real scope set and requiring each to raise.
 
 ---
 
@@ -71,7 +100,8 @@ agent tried something it must never do.
 | | Where that is enforced |
 |---|---|
 | Merge anything | `github.py` → `GitHubHelper.merge_pull_request` always raises; there is no scope that enables it and no argument that changes it |
-| Push to `main` | `guardrails.py` → `assert_writable_ref`, twice over: `main` is in `PROTECTED_REFS` *and* fails the `triage/*` pattern |
+| Push to `main` | `guardrails.py` → `assert_writable_ref`, twice over: `main` is in `PROTECTED_REFS` *and* fails the agent-namespace pattern |
+| Write any branch outside `triage/*` and `agent/*` | `guardrails.py` → `AGENT_REF`. The Phase 5 widening is a whole path segment, anchored: `agents/`, `agent-x/`, `agentfoo/` and `x/agent/y` all stay refused, and `test_guardrails.py` names each one |
 | Edit `.github/**` | `guardrails.py` → `FORBIDDEN_DIFF_PREFIXES`; a triage agent that can edit its own trigger or the CI gates that judge it is not reviewable |
 | Edit `agents/core/**` | same list — an agent that can rewrite its own guardrails has none |
 | Re-run or cancel CI | the workflow grants `actions: read`, never `write` |
@@ -89,16 +119,165 @@ Measured per-triage figures are in the demo record below — not estimates.
 
 ---
 
+## The CVE Response Agent
+
+`.github/workflows/sbom-rescan.yml` re-scans the SBOMs of the published images
+against fresh vulnerability data, daily, and hands anything new to the agent.
+
+```
+daily re-scan of the stored SBOMs (fresh CVE data)
+   |
+   v
+new fixable HIGH/CRITICAL? ── no ──> the workflow ends. No agent, no model call, no cost.
+   |
+  yes
+   v
+group by CVE ──────────  one CVE affecting libssl3 AND libcrypto3 is ONE problem
+   |
+   v
+dedupe ────────────────  an open PR or issue naming this CVE suppresses re-filing
+   |
+   v
+gather evidence ───────  the Dockerfile/requirements that install each package,
+   |                     in full; the layer each was found in; and what each
+   |                     pinned base-image tag resolves to in the registry TODAY
+   v
+ask Claude ────────────  affected? blast radius? which of three remediations?
+   |
+   v
+verify ────────────────  git apply --check -> git apply -> docker build -> trivy
+   |                     the SAME commands ci.yml runs, same pinned scanner
+   |
+   +--- built and scans clean ---> agent/cve-<id> -> commit -> push -> PR
+   |
+   +--- anything less ----------> a diagnosis-only issue, nothing pushed
+```
+
+### Why a finding is always new, with no state file
+
+`ci.yml` publishes an image only after `trivy image --severity HIGH,CRITICAL
+--ignore-unfixed --exit-code 1` passes. Every published image therefore had
+**zero** fixable HIGH/CRITICAL at publish. Anything the re-scan finds under the
+identical filter was disclosed, or became fixable, afterwards. There is no
+"previously seen" ledger to keep and none to go stale.
+
+Cross-*day* dedupe is a different problem and is solved differently: the agent
+searches the repository's own open issues and PRs for the CVE id. GitHub's
+state is the ledger. A human who closes an issue by hand has made a decision,
+and the agent's next run respects it rather than silently overriding it.
+
+Titles only, deliberately. A CVE id in an issue *body* is usually a reference
+("supersedes CVE-…"), and suppressing a real finding because something
+mentioned it in passing is expensive in both directions — the CVE goes
+unpatched and nobody is told why.
+
+### Three endings, and two of them are issues
+
+| Ending | When | Why it is not a failure |
+|---|---|---|
+| **Fix PR** | confident, the diff applied, the image built, trivy came back clean | — |
+| **Diagnosis-only issue** | low confidence, no clean remediation, or the patch failed to build or failed to clear the finding | A speculative security patch spends the review attention the real fix needed, and puts a false "patched" signal on the repo |
+| **Assessment issue** | the finding does not affect what we ship (e.g. the package is only in a discarded build stage) | Filing it is a *cost* decision as much as a documentation one — without it the agent re-reaches the same conclusion at full model price every morning |
+
+### The digest rule
+
+CLAUDE.md rule 2 pins every base image by digest, so a base-image bump means
+writing a `sha256:` into a Dockerfile — and a model asked to do that will
+produce a well-formed digest that does not exist. The diff applies, the branch
+pushes, and the build fails on a digest nobody can trace.
+
+So `registry.py` resolves what each pinned tag points at *now* (anonymous,
+`HEAD` only, no response body ever parsed) before the model is called, and the
+prompt permits a digest in a diff **only** if it appears verbatim in that
+evidence. The model decides whether to bump. It never supplies the value.
+
+### The re-scan reads the CycloneDX SBOM, not the SPDX
+
+This looks like a preference and is not. Measured on the `stale-base` scenario,
+one image scanned four ways:
+
+| Scanned | Fixable HIGH found |
+|---|---|
+| `trivy image` (the CI gate's own answer) | **2** |
+| syft SPDX | 0 |
+| syft CycloneDX | 0 |
+| trivy CycloneDX | **2** |
+
+Alpine advisories are keyed on the *source* package (`openssl`), not the binary
+package (`libssl3`). Trivy's own CycloneDX records that as an
+`aquasecurity:trivy:SrcName` property; syft records it only as an `upstream=`
+qualifier inside the purl, which trivy's SBOM decoder does not map back. Trivy
+identified the OS correctly in every case — this was never distro detection.
+
+A daily re-scan of the syft SBOM would have returned a confident, permanent
+zero: it would not go red, it would report "all clear" every morning for ever.
+That is the worst failure available to a control whose entire job is to notice
+something. `ci.yml` now emits both SBOMs — SPDX as the portable document of
+record, CycloneDX as the scannable one — and the re-scan reads the latter.
+
+---
+
+## The Upgrade Agent
+
+`.github/workflows/upgrade-agent.yml` fires when Renovate opens a PR.
+
+```
+Renovate opens a dependency PR
+   |
+   v
+is it a dependency bot, and not another agent's branch? ── no ──> skip, no model call
+   |
+  yes
+   v
+read the PR ───────────  the pin that moved, read out of the DIFF, not the title
+   |                     the release notes, read out of Renovate's own PR body
+   v
+grep our usage ────────  every tracked file naming the dependency, application
+   |                     code ranked above test fixtures
+   v
+ask Claude ────────────  risk against OUR code; what changed; what to do
+   |
+   v
+one comment on the PR ─  risk level, upstream changes, our affected paths,
+                         and one of four recommendations: merge/review/test/hold
+```
+
+**Release notes come from Renovate's PR body.** Renovate has already fetched
+the upstream changelog for the version jump; giving the agent a scope to reach
+arbitrary upstream repositories would be a far larger grant than the job needs.
+When a body carries no notes section, the comment says so and the model is told
+to lower its confidence rather than reason from what it remembers about the
+package — a confident claim about a release it cannot see is the failure mode
+that matters here.
+
+**It annotates on `opened` and `reopened` only.** Renovate force-pushes a PR
+when a newer version appears. Re-annotating on every push would require the
+agent to read its own prior comments to avoid duplicating them — a read it has
+no scope for — so rather than widen the grant for a convenience, a superseded
+annotation is left standing and a human can re-run it by hand. A real
+limitation, written down rather than papered over.
+
+**`pull_request_target`, and why that is safe here.** Renovate bumps pinned
+GitHub Actions, so its PRs routinely touch `.github/workflows/`. Under a
+`pull_request` trigger the contents of a PR could rewrite the very workflow
+that holds `ANTHROPIC_API_KEY`. `pull_request_target` runs the workflow from the
+default branch instead. That trigger is dangerous in exactly one situation —
+checking out the PR's head and executing it — and this workflow never does:
+the checkout has no `ref:`, and the PR reaches the agent as *data* through
+`gh api`, never as code that runs.
+
+---
+
 ## The six governance pillars, and where each one lives in code
 
 | Pillar | Mechanism | Read it here |
 |---|---|---|
-| **Least-privilege** | Each agent declares its allowed actions at startup; core refuses anything undeclared. The `Action` enum is the entire vocabulary — it contains no merge, deploy, release or delete, so those are not capabilities a config change could grant. | `core/day2_agents/scopes.py`; declared in `triage/triage/agent.py` → `SCOPES`; tested in `core/tests/test_scopes.py` |
+| **Least-privilege** | Each agent declares its allowed actions at startup; core refuses anything undeclared. The `Action` enum is the entire vocabulary — it contains no merge, deploy, release or delete, so those are not capabilities a config change could grant. Phase 5 added three members (`read_pr`, `open_issue`, `comment_on_pr`), each a read or a proposal; the absences are unchanged. | `core/day2_agents/scopes.py`; declared in each agent's `agent.py` → `SCOPES`; tested in `core/tests/test_scopes.py` and `upgrade/tests/test_agent.py` |
 | **Sandboxed execution** | Every external command is a fixed `argv` list run with `shell=False` — no model output is ever interpolated into a shell string. A forbidden-fragment check refuses `gh pr merge`, `--auto`, `--admin` and force-pushes before the argv reaches a subprocess. The agent holds no credential of its own: it inherits the workflow's `GITHUB_TOKEN`, so narrowing it is a three-line edit to `permissions:`. | `core/day2_agents/github.py` → `FORBIDDEN_ARGV_FRAGMENTS`, `_assert_argv_allowed`; tested in `core/tests/test_github.py` |
 | **Audit trails** | One entry per externally-visible action, in the exact CLAUDE.md schema, written to *both* the workflow log (readable in the Actions UI) and a file uploaded as a 90-day artifact. Both sinks flush immediately, so a cancelled run still shows what it had already done. `approved_by` is `null` on every agent-written entry — an agent cannot approve its own work; the null is the evidence the proposal was unapproved when it was made. | `core/day2_agents/audit.py`; tested in `core/tests/test_audit.py` |
 | **Human-in-the-loop** | The refusals in the table above, plus two platform backstops: GitHub does not trigger workflows for events created with `GITHUB_TOKEN`, so an agent-opened PR cannot even start CI on itself; and branch protection on `main` requires an approving review the agent is structurally unable to supply. A human re-runs CI, reviews, and merges. See [Platform-side controls](#platform-side-controls) — the settings have no diff, so they are recorded here. | `core/day2_agents/guardrails.py`; tested in `core/tests/test_guardrails.py` |
 | **Secrets via env/SSM only** | `ANTHROPIC_API_KEY` is read from the environment at call time and never written to disk, never logged, and never placed in a prompt. A missing key is an error naming the variable, not a silent fallback. `GITHUB_TOKEN` is injected by Actions per-run. | `core/day2_agents/claude.py` → `_ensure_client`; blast radius and rotation in [`infra/iam/README.md`](../infra/iam/README.md) |
-| **Output verification** | Three independent checks before anything is acted on: the response must parse as the exact JSON contract (`validate_diagnosis` — every field, type and enum value); the diff's paths must survive the guardrails; and `git apply --check` must prove the patch applies to the real failing tree. A confident model with a hallucinated diff is stopped by the third. | `triage/triage/agent.py` → `validate_diagnosis`; `core/day2_agents/diffs.py` → `validate_diff`; tested in `core/tests/test_diffs.py` and `triage/tests/test_agent.py` |
+| **Output verification** | Three independent checks before anything is acted on: the response must parse as the exact JSON contract (every field, type and enum value); the diff's paths must survive the guardrails; and `git apply --check` must prove the patch applies to the real tree. A confident model with a hallucinated diff is stopped by the third. The CVE agent adds a fourth and fifth — `docker build` and `trivy`, the *same* commands `ci.yml` runs — so its PRs have already passed the gate that will judge them. The Upgrade agent's only output is prose, so it has no `git apply` downstream and its field contract is correspondingly stricter. | `triage/triage/agent.py` → `validate_diagnosis`; `cve-response/cve_response/agent.py` → `validate_assessment`, `verify.py`; `upgrade/upgrade/agent.py` → `validate_annotation`; `core/day2_agents/diffs.py` → `validate_diff` |
 
 The guardrail tests are the ones that matter. They do not assert that the agent
 works — they assert that it **refuses**: that `main` is unwritable, that a diff
@@ -185,9 +364,11 @@ produces a wasted run.
 
 ## Seeded failure scenarios
 
-`scripts/break.sh` seeds four reproducible breaks, each failing at a *different*
-gate — a triage agent that has only ever seen one kind of failure has not been
-tested.
+`scripts/break.sh` seeds five reproducible breaks. The first four each fail at
+a *different* gate — a triage agent that has only ever seen one kind of failure
+has not been tested. The fifth is for the CVE agent and is different in kind:
+it does not invent a break, it restores a state this repository genuinely
+shipped from.
 
 | Scenario | File it edits | Expected gate |
 |---|---|---|
@@ -195,6 +376,17 @@ tested.
 | `fail-test` | `app/api/tests/test_health.py` | `pytest (api)` / Run tests |
 | `bad-env` | `deploy/helm/templates/worker.yaml` | `helm lint` / Chart env contract |
 | `vuln-image` | `app/api/Dockerfile` | `image (api)` / Scan image (trivy) |
+| `stale-base` | `app/web/Dockerfile` | `image (web)` / Scan image (trivy), **and** a real finding for the CVE agent |
+
+`stale-base` drops the CVE-2026-14456 bridge from the web runtime stage,
+returning the image to what it shipped before commit `4799195`. It removes the
+explanatory comment with it — that comment names the CVE, the package and the
+fixed version, and a demo that hands the model its own answer has verified
+nothing.
+
+CI goes red at the trivy gate, which is the point: `ci.yml` uploads both SBOMs
+*before* that gate, so the artifacts exist on the red run and the re-scan can
+be aimed at it with `-f source_run=<red ci run id>`.
 
 ```bash
 git switch -c phase4/scenario-bad-dep
@@ -350,7 +542,72 @@ name and the command to finish the job by hand, while a guardrail violation at
 the same point stays fatal. The attempt-1 run above is the trail it was written
 from and is left as recorded.
 
-### Scenario coverage, stated exactly
+### Phase 5 defects, found by running it
+
+Three, all found by executing the pipeline against a genuinely vulnerable image
+rather than by reading it. Recorded here for the same reason the Phase 4
+defects are: a demo that only shows the happy path has not tested anything.
+
+| # | Defect | Status |
+|---|---|---|
+| 1 | The daily re-scan read the syft SPDX SBOM and returned a permanent, confident **zero** on an image with two fixable HIGH CVEs | Fixed, `e1d7ec7` |
+| 2 | One CVE affecting two packages would have been assessed twice and filed as two PRs, breaking one-PR-per-CVE from the inside | Fixed, `e1d7ec7` |
+| 3 | A moved base-image tag was presented to the model as though it were a fixed one | Fixed, `dd5b0bf` |
+
+**Defect 1 in full**, because it is the one worth remembering. The workflow
+parsed its SBOM, ran clean and went green — while reporting nothing on an image
+the CI gate itself flags twice. Measured, one image scanned four ways:
+
+| Scanned | Fixable HIGH found |
+|---|---|
+| `trivy image` — the CI gate's own answer | **2** |
+| syft SPDX — *what the workflow originally re-scanned* | **0** |
+| syft CycloneDX | **0** |
+| trivy CycloneDX | **2** |
+
+Alpine advisories are keyed on the *source* package (`openssl`), not the binary
+package (`libssl3`). Trivy's CycloneDX records that as an
+`aquasecurity:trivy:SrcName` property; syft records it only as an `upstream=`
+purl qualifier, which trivy's SBOM decoder does not map back. Trivy identified
+the OS correctly in every case — this was never distro detection, which is
+precisely why no amount of reading the workflow would have found it.
+
+The failure mode is the dangerous one: not loud, but *silent and reassuring*.
+No error, no red run, no missing artifact — just a permanent zero from the one
+mechanism whose entire job is to notice something, growing more trustworthy the
+longer it ran. Fixed by emitting both SBOMs from `ci.yml` and re-scanning the
+CycloneDX copy; see [the section above](#the-re-scan-reads-the-cyclonedx-sbom-not-the-spdx).
+
+**Defect 3** came from a real upstream event rather than a seeded one. Renovate
+opened [#19](https://github.com/okaforpascal400/day2-control-plane/pull/19)
+bumping `nginx-unprivileged:1.31-alpine` to digest `901e944` — the same digest
+the agent's own resolver reports. Pulling and inspecting that image: it still
+ships `libssl3`/`libcrypto3` 3.5.7-r0. Upstream republished the tag *without*
+the OpenSSL fix, so the bridge in `app/web/Dockerfile` is still doing the work
+its comment predicted it would stop doing. The evidence line said "this tag has
+moved; this digest may be used in a diff", which invites the inference that a
+newer digest is a patched one. It now says the opposite in as many words.
+
+### Phase 5 coverage, stated exactly
+
+**Neither Phase 5 agent has had a live run yet, and neither has a cost.** Both
+are complete, tested (`cve-response` 64, `upgrade` 35) and verified as far as
+they can be without one:
+
+* The whole CVE evidence path was run locally against a genuinely vulnerable
+  image — build → syft + trivy SBOMs → `trivy sbom` → `collect_cve_findings.py`
+  → grouped by CVE → the full prompt assembled, with the base-image digest
+  resolved live from Docker Hub. That run is what found both defects fixed in
+  `e1d7ec7`. It stops short of the model call.
+* The Upgrade agent has been exercised against Renovate's exact PR shape in
+  tests, not against a live Renovate PR.
+
+Neither can go further from a local checkout: `ANTHROPIC_API_KEY` is a
+repository secret, and `workflow_dispatch` only offers a workflow that is
+already on the default branch. So the seeded runs happen after this branch
+merges, and the demo record below is written from them — not before.
+
+### Phase 4 scenario coverage, stated exactly
 
 `bad-dep` and `fail-test` have each had a full live run. `bad-env` and
 `vuln-image` are scripted in `scripts/break.sh` and each has its CI gate in
@@ -379,9 +636,17 @@ PYTHONPATH=agents/core:agents/triage python -m triage.agent
 ## Tests
 
 ```bash
-cd agents/core   && pytest -q     # library: scopes, audit, guardrails, diffs, gh
-cd agents/triage && pytest -q     # agent: evidence, verification, both outcomes
+cd agents/core         && pytest -q   # library: scopes, audit, guardrails, diffs, gh
+cd agents/triage       && pytest -q   # evidence, verification, both outcomes
+cd agents/cve-response && pytest -q   # grouping, dedupe, the three endings
+cd agents/upgrade      && pytest -q   # the skips, the contract, the refusals
 ```
 
-Both run in CI as `pytest (agents/core)` and `pytest (agents/triage)`, and
-publishing images is gated on them.
+All four run in CI as `pytest (agents/<package>)`, and publishing images is
+gated on them.
+
+The CVE suite installs an autouse fixture that replaces the registry resolver.
+The first draft made real Docker Hub calls from the test suite — 10.8s of
+network per run, and a CI job that would go red on an upstream rate limit
+rather than on a defect. Nothing is mocked beyond the socket: the module's own
+parsing and rendering still run.

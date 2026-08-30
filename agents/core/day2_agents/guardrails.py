@@ -9,10 +9,19 @@ into disabling.
 
 Three rules:
 
-1. **Writable refs are `triage/*` only.** Every branch an agent creates or
-   pushes must match `TRIAGE_REF`. `main` is not merely absent from the
-   allow-list; it is separately blocked by `PROTECTED_REFS` so a future pattern
-   change cannot accidentally let it through.
+1. **Writable refs are the agent namespaces only.** Every branch an agent
+   creates or pushes must match `AGENT_REF` — `triage/*` or `agent/*`, and
+   nothing else. `main` is not merely absent from the allow-list; it is
+   separately blocked by `PROTECTED_REFS` so a future pattern change cannot
+   accidentally let it through.
+
+   The second prefix was added in Phase 5. `triage/*` was the whole namespace
+   while triage was the only agent, and a CVE remediation branch named
+   `triage/cve-2026-14456` misnames itself in the one place a reviewer looks
+   first. Widening it is a guardrail change and is written to be *exact*: the
+   alternation is anchored and must be followed by `/`, so `agents/x`,
+   `agent-x/y` and `agentfoo/z` are all still refused. A guardrail loosened by
+   a sloppy regex is a guardrail removed.
 2. **Merging is not implemented.** `GitHubHelper.merge_pull_request` exists only
    to raise. Humans approve (CLAUDE.md rule 3), so the capability is absent from
    the library rather than gated behind a flag.
@@ -28,7 +37,21 @@ from __future__ import annotations
 import posixpath
 import re
 
-TRIAGE_REF = re.compile(r"^triage/[A-Za-z0-9][A-Za-z0-9._-]{0,98}$")
+# Anchored at both ends; the alternation is a whole path segment, so only an
+# exact `triage` or `agent` followed by `/` matches. The first character after
+# the slash must be alphanumeric, which is what keeps `agent/../x`, `agent//x`
+# and `agent/.hidden` out without a second check.
+#
+# `\Z`, not `$`. In Python `$` also matches immediately *before* a trailing
+# newline, so `^...$` accepted `triage/x\n` — a ref carrying a newline into
+# `git push origin <ref>:<ref>`. That was true of the Phase 4 pattern as well;
+# the boundary tests written for the `agent/*` widening are what surfaced it.
+# `\Z` matches only at the very end of the string.
+AGENT_REF = re.compile(r"^(?:triage|agent)/[A-Za-z0-9][A-Za-z0-9._-]{0,98}\Z")
+
+# The namespaces themselves, for error messages and documentation. Kept beside
+# the pattern so the two cannot drift.
+AGENT_REF_PREFIXES: tuple[str, ...] = ("triage/", "agent/")
 
 PROTECTED_REFS = frozenset({"main", "master", "HEAD"})
 
@@ -56,10 +79,10 @@ def assert_writable_ref(ref: str) -> str:
             f"refusing to write to protected ref {ref!r} "
             "(CLAUDE.md rule 3: never push main)"
         )
-    if not TRIAGE_REF.match(ref):
+    if not AGENT_REF.match(ref):
+        allowed = ", ".join(f"{prefix}*" for prefix in AGENT_REF_PREFIXES)
         raise GuardrailViolation(
-            f"refusing to write to {ref!r}: "
-            "agents may only write refs matching 'triage/*'"
+            f"refusing to write to {ref!r}: agents may only write refs matching {allowed}"
         )
     return ref
 
