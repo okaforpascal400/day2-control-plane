@@ -78,7 +78,8 @@
       Not ticked: it has annotated one PR, on the `workflow_dispatch` path; the
       `pull_request_target` trigger has not fired on its own yet.
 - Four defects found by running the pipeline, the fourth in the agent's own
-  proposed diff — `agents/README.md`, "Phase 5 defects, found by running it".
+  proposed diff and fixed in [#27](https://github.com/okaforpascal400/day2-control-plane/pull/27) — `agents/README.md`,
+  "Phase 5 defects, found by running it".
 
 ## Phase 6 — MCP Server + Observability Copilot
 - [ ] Read-only MCP: query_prometheus, search_logs, get_dashboard, read_runbook, git_history
