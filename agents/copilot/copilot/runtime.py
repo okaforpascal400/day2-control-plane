@@ -41,6 +41,7 @@ common failure, and it is deliberately described that way rather than as
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -71,14 +72,45 @@ AGENT_NAME = "day2-observability-copilot"
 AGENT_VERSION = "1.0"
 
 # Hard ceiling on one session's model spend, approved at the Phase 6 gate.
-# Checked *between turns*, so a session stops mid-investigation rather than
-# discovering it overspent.
+#
+# CORRECTED after the first live run overspent it 2.4x. The original check ran
+# *between* turns and compared spend-so-far against the cap. That is not a cap,
+# it is a report: a single turn's cost is unbounded, and on the run that found
+# this the seventh turn cost $0.73 on its own from a standing balance of $0.45.
+# See "The overspend, and what it cost to learn" in agents/README.md.
+#
+# A cap has to refuse a call *before* it is made, so `_preflight` estimates what
+# the next call will cost and stops if that estimate would breach the budget.
 DEFAULT_SESSION_BUDGET_USD = 0.50
 
 # A runaway loop is the other way to spend money. Ten turns is generous for the
 # questions this answers (the live runs use three to six) and bounded.
 MAX_TURNS = 10
-MAX_TOKENS_PER_TURN = 4_000
+MAX_TOKENS_PER_TURN = 2_000
+
+# The real cause of the overspend was not any single tool result — those are
+# capped in `limits.py` — but their *accumulation*. Every tool result stays in
+# the conversation and is re-sent on every subsequent turn, so 14 calls of
+# capped-but-large results reached 211,833 input tokens. Bounding one message
+# and leaving the transcript unbounded is the same bug one level up.
+#
+# So the transcript is bounded too: past a ceiling, older tool results are
+# replaced by a compact stub that keeps what the model actually needs later —
+# which tool ran, with what arguments, and the citation id it can still cite —
+# and drops the payload it has already read.
+MAX_CONTEXT_TOKENS = 40_000
+KEEP_FULL_RESULTS = 3
+
+# Over-investigation is a cost driver in its own right: the first live run made
+# 14 tool calls for one question, several of them redundant.
+MAX_TOOL_CALLS_PER_QUESTION = 12
+
+# Characters per token, used only for the pre-flight estimate. Deliberately low
+# (real English is ~4) so the estimate runs *high*: for a spend cap, erring
+# toward refusing a call is the safe direction. This is a local heuristic rather
+# than `client.messages.count_tokens` on purpose — the cap must work without an
+# extra network round-trip on every turn, and must be testable offline.
+CHARS_PER_TOKEN = 3.0
 
 _CITATION_RE = re.compile(r"\b(prometheus|loki|repo|git):(\d{8})\b")
 
@@ -163,6 +195,7 @@ class CopilotSession:
         self._client = client
         self.budget_usd = budget_usd
         self.total_cost_usd = 0.0
+        self.trimmed_results = 0
         self.turns: list[Turn] = []
         self.chain = ReceiptChain(
             session_id,
@@ -198,6 +231,106 @@ class CopilotSession:
                 f"${self.budget_usd:.2f}. Start a new session to continue."
             )
 
+    def estimate_input_tokens(self, system: str, messages: list[dict[str, Any]]) -> int:
+        """Rough, deliberately high, estimate of a request's input size.
+
+        Counts the characters that will actually be serialised — system prompt,
+        every message, and the tool schemas, which are re-sent on every call and
+        are not negligible. Divided by a low chars-per-token so the number errs
+        upward.
+        """
+        payload = json.dumps(messages, default=str, ensure_ascii=False)
+        schemas = json.dumps(self.registry.schemas(), default=str)
+        characters = len(payload) + len(system) + len(schemas)
+        return int(characters / CHARS_PER_TOKEN)
+
+    def _preflight(self, system: str, messages: list[dict[str, Any]]) -> None:
+        """Refuse a call whose worst case would breach the cap.
+
+        The worst case is knowable before sending: estimated input tokens at the
+        input rate, plus `MAX_TOKENS_PER_TURN` at the output rate, since the API
+        cannot return more output than that. If spend-so-far plus that worst
+        case exceeds the budget, the call is not made at all.
+
+        This is the difference between a cap and a report, and the reason the
+        first live run cost 2.4x its cap: checking afterwards cannot prevent
+        anything.
+        """
+        estimated_input = self.estimate_input_tokens(system, messages)
+        worst_case = compute_cost_usd(MODEL, estimated_input, MAX_TOKENS_PER_TURN)
+        if self.total_cost_usd + worst_case > self.budget_usd:
+            raise BudgetExceeded(
+                f"refusing the next call: spent ${self.total_cost_usd:.4f}, and "
+                f"this call could cost up to ${worst_case:.4f} "
+                f"(~{estimated_input:,} input tokens), which would exceed the "
+                f"${self.budget_usd:.2f} cap. Nothing was sent."
+            )
+
+    def _trim_transcript(self) -> None:
+        """Stub out old tool results once the transcript grows past the ceiling.
+
+        Only the *content* of a `tool_result` block is replaced, never the block
+        itself: the API requires every `tool_use` to be answered by a matching
+        `tool_result`, so removing one would make the request invalid. What
+        remains is enough for the model to keep working — the tool that ran and
+        the citation id it may still cite — without re-sending a payload it has
+        already read.
+        """
+        if (
+            self.estimate_input_tokens(SYSTEM_PROMPT, self._messages)
+            <= MAX_CONTEXT_TOKENS
+        ):
+            return
+
+        # Find tool_result blocks, oldest first, keeping the most recent intact.
+        positions: list[tuple[int, int]] = []
+        for m_index, message in enumerate(self._messages):
+            content = message.get("content")
+            if message.get("role") != "user" or not isinstance(content, list):
+                continue
+            for b_index, block in enumerate(content):
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    positions.append((m_index, b_index))
+
+        trimmable = (
+            positions[:-KEEP_FULL_RESULTS] if len(positions) > KEEP_FULL_RESULTS else []
+        )
+        for m_index, b_index in trimmable:
+            block = self._messages[m_index]["content"][b_index]
+            if block.get("_trimmed"):
+                continue
+            stub = self._stub_for(block)
+            block["content"] = stub
+            block["_trimmed"] = True
+            self.trimmed_results += 1
+            if (
+                self.estimate_input_tokens(SYSTEM_PROMPT, self._messages)
+                <= MAX_CONTEXT_TOKENS
+            ):
+                break
+
+    @staticmethod
+    def _stub_for(block: dict[str, Any]) -> str:
+        """A one-line replacement for a tool result the model has already read."""
+        try:
+            original = json.loads(block.get("content") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            original = {}
+        citation = original.get("citation_id")
+        keys = [k for k in original if k not in ("provenance", "citation_id")][:6]
+        return json.dumps(
+            {
+                "elided": True,
+                "note": (
+                    "This result was read earlier in the conversation and its "
+                    "payload has been dropped to stay within the session's "
+                    "context budget. You may still cite it."
+                ),
+                "citation_id": citation,
+                "fields_it_contained": keys,
+            }
+        )
+
     # -- the loop --------------------------------------------------------
     def ask(self, question: str, extensions: dict[str, Any] | None = None) -> Turn:
         """Answer one question. Always returns a Turn with a signed receipt."""
@@ -211,9 +344,17 @@ class CopilotSession:
         tools = self.registry.schemas()
         evidence_index = 0
 
+        # A question that cannot even be *started* raises, rather than returning
+        # an empty turn: there is no partial result to hand back, and the caller
+        # needs to know the session is finished rather than that this question
+        # happened to fail. Once at least one call has been made the loop below
+        # degrades gracefully instead, so whatever evidence was gathered is kept.
+        self._preflight(SYSTEM_PROMPT, self._messages)
+
         for _turn_number in range(MAX_TURNS):
             try:
                 self._check_budget()
+                self._preflight(SYSTEM_PROMPT, self._messages)
             except BudgetExceeded as exc:
                 turn.stopped_early = str(exc)
                 break
@@ -274,6 +415,13 @@ class CopilotSession:
 
             # Execute every requested tool, then return ALL results in ONE user
             # message — splitting them trains the model out of parallel calls.
+            if evidence_index >= MAX_TOOL_CALLS_PER_QUESTION:
+                turn.stopped_early = (
+                    f"reached the {MAX_TOOL_CALLS_PER_QUESTION}-tool-call ceiling "
+                    "for one question without concluding"
+                )
+                break
+
             results_block: list[dict[str, Any]] = []
             for block in tool_uses:
                 result = self.registry.call(block.name, dict(block.input))
@@ -293,6 +441,8 @@ class CopilotSession:
                     }
                 )
             self._messages.append({"role": "user", "content": results_block})
+            # Bound the transcript before the next turn re-sends all of it.
+            self._trim_transcript()
         else:
             turn.stopped_early = f"stopped after {MAX_TURNS} turns without concluding"
 
@@ -329,6 +479,7 @@ class CopilotSession:
                     "scopes": self.registry.declared_scopes(),
                     "session_total_usd": round(self.total_cost_usd, 6),
                     "stopped_early": turn.stopped_early,
+                    "trimmed_results": self.trimmed_results,
                     **{k: v for k, v in (extensions or {}).items() if k != "mode"},
                 }
             },
@@ -374,6 +525,9 @@ class CopilotSession:
         started = time.monotonic()
         turn = Turn(question=question, evidence=list(evidence))
         self._check_budget()
+        # Replay sends one large gathered-evidence prompt; it needs the same
+        # pre-flight refusal as the chat loop, for the same reason.
+        self._preflight(system, [{"role": "user", "content": user}])
 
         response = self._ensure_client().messages.create(
             model=MODEL,
