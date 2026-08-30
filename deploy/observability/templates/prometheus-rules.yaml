@@ -44,6 +44,44 @@ spec:
             summary: "Node {{`{{ $labels.instance }}`}} root filesystem almost full"
             description: "Root filesystem usage has been above 85% for 10 minutes."
 
+    - name: day2.observability
+      # Added in Phase 6, after the copilot found that promtail had been
+      # 0/1 Ready for ~45 hours with nothing noticing. Loki held no logs at all
+      # for that entire window while every dashboard stayed green, because
+      # Phase 3's "3/3 scrape targets up" counts the *application* services —
+      # the observability stack was not watching its own collector.
+      #
+      # An observability stack that cannot see its own collector die is the
+      # exact failure alert rules exist for, and it is worse than having no
+      # logs: it looks identical to "nothing is being logged because nothing
+      # is happening".
+      rules:
+        - alert: PromtailNotReady
+          # Fires on the shape the real outage had: the pod stays Running, so
+          # PodCrashLooping never fires, but it is not Ready and ships nothing.
+          # Deliberately compares ready against *desired* rather than testing
+          # `== 0`, so it also catches a partial outage on a multi-node cluster.
+          expr: |
+            kube_daemonset_status_number_ready{daemonset="promtail"}
+            < kube_daemonset_status_desired_number_scheduled{daemonset="promtail"}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "promtail is not ready — logs are not reaching Loki"
+            description: "{{`{{ $value }}`}} of the desired promtail pods are ready. While this fires, Loki is missing log lines and any log-based investigation is working from an incomplete picture. Known cause: promtail saturating its own CPU (measured at 1.43 cores against a 20m request) so that even its local /ready probe times out; a pod restart clears it."
+
+        - alert: LokiNotReady
+          expr: |
+            kube_statefulset_status_replicas_ready{statefulset="loki"}
+            < kube_statefulset_status_replicas{statefulset="loki"}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Loki is not ready — log ingestion and queries are degraded"
+            description: "Loki has fewer ready replicas than desired. Log queries will return partial or empty results, which is indistinguishable from 'there were no logs' unless this alert is visible."
+
     - name: day2.app
       rules:
         - alert: JobQueueStuck

@@ -178,3 +178,53 @@ publishing an accurate queue-depth gauge while completions stopped — a faithfu
 "long transaction starves the worker" incident. Note that simply scaling the worker
 to zero does **not** work: `day2_job_queue_depth` is a worker metric, so its series
 would disappear and the alert could never satisfy its own first condition.
+
+## Operational defect, found in Phase 6: the stack was not watching its own collector
+
+Recorded here rather than in the Phase 6 notes, because it is a defect in *this*
+phase's work — Phase 3 was marked complete with it already present.
+
+**What happened.** While building the Observability Copilot, its `search_logs`
+tool returned zero lines against a cluster that was plainly running. Loki held no
+labels at all. `promtail` was `0/1 Running` and had been for roughly **45 hours**.
+Nothing alerted, and nothing looked wrong: metrics kept flowing, all three
+dashboards stayed populated, and Phase 3's "3/3 scrape targets up" stayed true
+the whole time — because those three targets are the *application* services. The
+log pipeline was never in the count.
+
+**Cause.** Promtail was saturating its own CPU, measured at **1.43 cores** against
+a `20m` request with no limit. At that load even its local `/ready` probe timed
+out (`Readiness probe failed ... context deadline exceeded`, x1616 over 4h16m),
+and so did every push to Loki (`context deadline exceeded` on
+`/loki/api/v1/push`). Deleting the pod cleared it: `1/1 Ready`, CPU
+**1.43 → 0.06 cores**, 11 labels in Loki within a minute.
+
+**Why it went unnoticed for 45 hours.** The pod stayed `Running`, so
+`PodCrashLooping` never fired — that rule keys on `CrashLoopBackOff`. Nothing
+else looked at readiness. This is the worst shape of observability failure: an
+empty log query is indistinguishable from "nothing was logged", so the gap
+argues for its own absence.
+
+**Fixed in this branch.** A `day2.observability` rule group with
+`PromtailNotReady` and `LokiNotReady`, comparing *ready* against *desired* rather
+than testing `== 0`, so a partial outage on a multi-node cluster also fires.
+
+**Verified against the recorded history rather than asserted.** The new
+expression was evaluated at past timestamps spanning the real outage:
+
+| Evaluated at | `PromtailNotReady` |
+|---|---|
+| 2026-08-30T18:00Z | **FIRING** (ready=0) |
+| 2026-08-30T19:00Z | **FIRING** (ready=0) |
+| 2026-08-30T20:15Z | **FIRING** (ready=0) |
+| 2026-08-30T20:25Z (post-restart) | not firing |
+| 2026-08-30T20:45Z | not firing |
+
+**Still open — promtail and Loki are not scraped at all.** `up{job=~".*promtail.*"}`
+and `up{job=~".*loki.*"}` both return zero series, so their own metrics
+(`promtail_sent_entries_total`, `loki_distributor_lines_received_total`) do not
+exist in Prometheus. The new rules therefore work from kube-state-metrics
+readiness, which catches the outage that actually happened but would **not**
+catch a promtail that is Ready while silently dropping lines. Closing that needs
+ServiceMonitors for both, which is a Phase 3 change and is left as recorded debt
+rather than widened into the copilot's branch.
