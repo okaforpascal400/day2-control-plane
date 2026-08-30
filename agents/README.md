@@ -542,6 +542,52 @@ name and the command to finish the job by hand, while a guardrail violation at
 the same point stays fatal. The attempt-1 run above is the trail it was written
 from and is left as recorded.
 
+### Phase 5 defects, found by running it
+
+Three, all found by executing the pipeline against a genuinely vulnerable image
+rather than by reading it. Recorded here for the same reason the Phase 4
+defects are: a demo that only shows the happy path has not tested anything.
+
+| # | Defect | Status |
+|---|---|---|
+| 1 | The daily re-scan read the syft SPDX SBOM and returned a permanent, confident **zero** on an image with two fixable HIGH CVEs | Fixed, `e1d7ec7` |
+| 2 | One CVE affecting two packages would have been assessed twice and filed as two PRs, breaking one-PR-per-CVE from the inside | Fixed, `e1d7ec7` |
+| 3 | A moved base-image tag was presented to the model as though it were a fixed one | Fixed, `dd5b0bf` |
+
+**Defect 1 in full**, because it is the one worth remembering. The workflow
+parsed its SBOM, ran clean and went green — while reporting nothing on an image
+the CI gate itself flags twice. Measured, one image scanned four ways:
+
+| Scanned | Fixable HIGH found |
+|---|---|
+| `trivy image` — the CI gate's own answer | **2** |
+| syft SPDX — *what the workflow originally re-scanned* | **0** |
+| syft CycloneDX | **0** |
+| trivy CycloneDX | **2** |
+
+Alpine advisories are keyed on the *source* package (`openssl`), not the binary
+package (`libssl3`). Trivy's CycloneDX records that as an
+`aquasecurity:trivy:SrcName` property; syft records it only as an `upstream=`
+purl qualifier, which trivy's SBOM decoder does not map back. Trivy identified
+the OS correctly in every case — this was never distro detection, which is
+precisely why no amount of reading the workflow would have found it.
+
+The failure mode is the dangerous one: not loud, but *silent and reassuring*.
+No error, no red run, no missing artifact — just a permanent zero from the one
+mechanism whose entire job is to notice something, growing more trustworthy the
+longer it ran. Fixed by emitting both SBOMs from `ci.yml` and re-scanning the
+CycloneDX copy; see [the section above](#the-re-scan-reads-the-cyclonedx-sbom-not-the-spdx).
+
+**Defect 3** came from a real upstream event rather than a seeded one. Renovate
+opened [#19](https://github.com/okaforpascal400/day2-control-plane/pull/19)
+bumping `nginx-unprivileged:1.31-alpine` to digest `901e944` — the same digest
+the agent's own resolver reports. Pulling and inspecting that image: it still
+ships `libssl3`/`libcrypto3` 3.5.7-r0. Upstream republished the tag *without*
+the OpenSSL fix, so the bridge in `app/web/Dockerfile` is still doing the work
+its comment predicted it would stop doing. The evidence line said "this tag has
+moved; this digest may be used in a diff", which invites the inference that a
+newer digest is a patched one. It now says the opposite in as many words.
+
 ### Phase 5 coverage, stated exactly
 
 **Neither Phase 5 agent has had a live run yet, and neither has a cost.** Both
