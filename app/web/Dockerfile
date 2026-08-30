@@ -24,6 +24,14 @@ ENV API_UPSTREAM=http://day2-api:8000
 COPY --from=build /payload/ /usr/share/nginx/html/
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 
+# CVE-2026-14456 (HIGH) — openssl: DoS via unbounded memory growth in the QUIC
+# server. libssl3/libcrypto3 3.5.7-r0 ship in nginx-unprivileged:1.31-alpine;
+# fixed in 3.5.8-r0. BRIDGE, not a fix: when a rebuilt base image carries
+# openssl >= 3.5.8-r0 the apk constraint is already satisfied, this RUN becomes
+# a no-op, and it should be removed together with a digest bump of NGINX_IMAGE.
+USER root
+RUN apk add --no-cache --upgrade libssl3=3.5.8-r0 libcrypto3=3.5.8-r0
+
 # The base image already runs as this unprivileged uid on port 8080.
 USER 101
 
