@@ -228,3 +228,30 @@ readiness, which catches the outage that actually happened but would **not**
 catch a promtail that is Ready while silently dropping lines. Closing that needs
 ServiceMonitors for both, which is a Phase 3 change and is left as recorded debt
 rather than widened into the copilot's branch.
+
+### Adjacent finding: two rules reference series that are absent, not zero
+
+Noticed while validating the new rules against live Prometheus, and recorded
+rather than fixed — it is Phase 3 alert debt, not copilot work.
+
+`day2_jobs_processed_total` and `http_requests_total` both return **0 series**
+today. The first is genuinely defined in `app/worker/worker/metrics.py` as a
+`Counter`, but a labelled Prometheus counter does not exist until it has been
+incremented once: a worker that has restarted and not yet completed a job
+exports nothing for it.
+
+That matters for `JobQueueStuck`, whose second condition is
+`sum(rate(day2_jobs_processed_total{result="completed"}[10m])) == 0`. Against an
+absent series that expression yields an **empty vector, not `true`**, and
+`A and B` with an empty `B` is empty — so the alert cannot fire. The case it
+silently misses is the worst one: a worker that is crash-looping and has never
+processed a job since starting. Phase 3's live test passed because the worker
+there was healthy and *had* completed jobs, so the counter existed before the
+row lock stopped it.
+
+`HighApiErrorRate` has the same shape against `http_requests_total`, which the
+API does not expose at all — it publishes `http_request_duration_highr_seconds_*`.
+
+The fix in both cases is `or vector(0)` around the counter half (the pattern
+already used elsewhere in this file), plus using a series the API actually
+exports. Left as recorded debt.
