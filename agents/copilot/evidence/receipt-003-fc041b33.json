@@ -1,0 +1,117 @@
+{
+  "receipt_version": "1.0",
+  "receipt_id": "fc041b33-47a1-4cfb-81c8-d431e931fc4e",
+  "session_id": "8b81b940-d920-4048-95d8-97c2ca5253bd",
+  "sequence": 3,
+  "timestamp": "2026-08-30T22:00:50+00:00",
+  "agent": {
+    "name": "day2-observability-copilot",
+    "version": "1.0"
+  },
+  "model": {
+    "id": "claude-opus-5",
+    "effort": "high",
+    "max_tokens": 2000
+  },
+  "question": "How many unique end users hit the API during the load window today?",
+  "evidence": [
+    {
+      "index": 0,
+      "tool": "search_logs",
+      "arguments": {
+        "query": "{namespace=\"default\", component=\"api\"}",
+        "start": "2026-08-30T21:07:00Z",
+        "end": "2026-08-30T21:13:00Z",
+        "limit": 50
+      },
+      "result_digest": "sha256:127d89bc0e88841ae6ec63df56a7f5110a02b30de47858ee53d3f94d7058cd92",
+      "citation_id": "loki:76988218",
+      "provenance": {
+        "source": "loki",
+        "query": "{namespace=\"default\", component=\"api\"}",
+        "fetched_at": "2026-08-30T22:00:42+00:00",
+        "window": "2026-08-30T21:07:00+00:00..2026-08-30T21:13:00+00:00",
+        "endpoint": "http://localhost:3100",
+        "limit": 50,
+        "direction": "backward"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 42,
+      "redactions": 0,
+      "truncated": false
+    },
+    {
+      "index": 1,
+      "tool": "query_prometheus",
+      "arguments": {
+        "query": "count by (__name__) ({__name__=~\"http_.*|day2_.*\"})"
+      },
+      "result_digest": "sha256:fd2872c5cd5e98c912005d72f9818b1db4b076dcbbd95f5e080cad0af6fc3364",
+      "citation_id": "prometheus:67214584",
+      "provenance": {
+        "source": "prometheus",
+        "query": "count by (__name__) ({__name__=~\"http_.*|day2_.*\"})",
+        "fetched_at": "2026-08-30T22:00:42+00:00",
+        "endpoint": "http://localhost:9090"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 19,
+      "redactions": 0,
+      "truncated": false
+    }
+  ],
+  "answer": {
+    "text": "I stopped before reaching an answer: refusing the next call: spent $1.8287 of $2.00, and this call needs at least $0.2198 (~37,959 input tokens plus a 400-token floor). Nothing was sent.",
+    "citations": [],
+    "supported": false,
+    "unsupported_reason": "refusing the next call: spent $1.8287 of $2.00, and this call needs at least $0.2198 (~37,959 input tokens plus a 400-token floor). Nothing was sent."
+  },
+  "cost": {
+    "currency": "USD",
+    "amount": 0.038169,
+    "input_tokens": 20,
+    "output_tokens": 493,
+    "cache_read_tokens": 31363,
+    "cache_write_tokens": 1610,
+    "model_calls": 1
+  },
+  "chain": {
+    "sequence": 3,
+    "previous_digest": "sha256:dc8177572c8358c0d27c031544ad87c9a5b5b50f174835becdfa764276eaef4d"
+  },
+  "extensions": {
+    "copilot": {
+      "mode": "chat",
+      "elapsed_ms": 17233,
+      "tools_available": [
+        "get_alerts",
+        "get_dashboard",
+        "git_history",
+        "query_prometheus",
+        "read_runbook",
+        "search_logs"
+      ],
+      "scopes": [
+        "call_model",
+        "query_metrics",
+        "read_alerts",
+        "read_dashboard",
+        "read_git_history",
+        "read_runbook",
+        "search_logs"
+      ],
+      "session_total_usd": 1.828747,
+      "stopped_early": "refusing the next call: spent $1.8287 of $2.00, and this call needs at least $0.2198 (~37,959 input tokens plus a 400-token floor). Nothing was sent.",
+      "trimmed_results": 30
+    }
+  },
+  "signature": {
+    "algorithm": "Ed25519",
+    "public_key": "dopKvafiLSV24gMnv+wbQsG4v+x/Gq9fp6COcE8laj8=",
+    "key_fingerprint": "75a92eccca8a3598",
+    "payload_digest": "sha256:d58793e1fea2245cd3718311a6bfd7da626b4f156d53d69da2f3d5ab2c2c2664",
+    "value": "PnNJSSiNCXzgAo3lGf5+0Vog401F+BGq53SvPDtt1NwSxIJhGVe5NmvrB9BsKBr0uuNDABfIGVpmecIwbJe+Dw=="
+  }
+}
