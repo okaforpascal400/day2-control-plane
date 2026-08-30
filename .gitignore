@@ -37,3 +37,11 @@ deploy/observability/charts/
 # a run artifact (see .github/workflows/triage-agent.yml); this catches a local
 # run that defaults the path into the repo.
 *audit.jsonl
+
+# Copilot answer-receipt signing key. The PRIVATE half is a secret and lives in
+# ~/.config/day2-copilot/ (mode 0600) or DAY2_COPILOT_SIGNING_KEY; this entry
+# catches a key that gets generated into the working tree by mistake. The
+# PUBLIC half under agents/copilot/keys/*.pub is committed on purpose — a
+# receipt nobody outside this machine can verify is not evidence.
+*_ed25519.key
+copilot_ed25519.key
