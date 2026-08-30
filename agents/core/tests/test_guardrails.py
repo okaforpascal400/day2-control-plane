@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from day2_agents.guardrails import (
+    AGENT_REF_PREFIXES,
+    PROTECTED_REFS,
     GuardrailViolation,
     assert_paths_allowed,
     assert_writable_ref,
@@ -12,8 +14,18 @@ from day2_agents.guardrails import (
 )
 
 
-@pytest.mark.parametrize("ref", ["triage/12345-bad-dep", "triage/1", "triage/a.b_c-d"])
-def test_triage_refs_are_writable(ref):
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "triage/12345-bad-dep",
+        "triage/1",
+        "triage/a.b_c-d",
+        "agent/cve-2026-14456",
+        "agent/1",
+        "agent/a.b_c-d",
+    ],
+)
+def test_agent_namespace_refs_are_writable(ref):
     assert assert_writable_ref(ref) == ref
 
 
@@ -36,6 +48,66 @@ def test_triage_refs_are_writable(ref):
 def test_everything_else_is_refused(ref):
     with pytest.raises(GuardrailViolation):
         assert_writable_ref(ref)
+
+
+# ------------------------------------------- the Phase 5 widening, in detail
+#
+# `agent/*` was added alongside `triage/*` when the CVE agent arrived. The
+# tests below exist because *widening* a guardrail is the change most likely to
+# do more than it says: a regex that means to add one path segment very easily
+# adds a prefix match instead, and `agents/` — a real directory in this repo,
+# and one an agent may never write — is one character away from `agent/`.
+#
+# So the widening is pinned from both sides: exactly two namespaces are
+# writable, and every near-miss is refused by name.
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        # The near-misses that a prefix match — rather than a segment match —
+        # would wrongly admit. `agents/` is the dangerous one: it is a real
+        # path in this repository.
+        "agents/core",
+        "agents/x",
+        "agent-x/y",
+        "agentfoo/z",
+        "agentic/x",
+        "triages/x",
+        "triage-x/y",
+        # Right namespace, wrong shape.
+        "agent",
+        "agent/",
+        "agent//x",
+        "agent/../x",
+        "agent/.hidden",
+        "Agent/x",
+        "AGENT/x",
+        # Anchoring: the namespace must start the ref, not appear in it.
+        "x/agent/y",
+        "refs/heads/agent/x",
+        " agent/x",
+        "agent/x ",
+        "agent/x\n",
+    ],
+)
+def test_the_widening_is_exact_not_loose(ref):
+    """A namespace is a whole path segment. Near-misses stay refused."""
+    with pytest.raises(GuardrailViolation):
+        assert_writable_ref(ref)
+
+
+def test_exactly_two_namespaces_are_writable():
+    """A third prefix must be a deliberate change to this assertion, not a regex tweak."""
+    assert AGENT_REF_PREFIXES == ("triage/", "agent/")
+
+
+def test_no_protected_ref_can_be_reached_through_either_namespace():
+    """Widening must not open a second route to the refs that are never writable."""
+    for protected in PROTECTED_REFS:
+        for prefix in AGENT_REF_PREFIXES:
+            with pytest.raises(GuardrailViolation):
+                assert_writable_ref(f"{prefix}../{protected}")
 
 
 def test_main_is_refused_by_name_not_only_by_pattern():

@@ -1,0 +1,4 @@
+# The agent runs on agents/core, which carries the only real dependency
+# (the Claude client). Nothing else is needed: GitHub is reached through `gh`
+# and the registry through the standard library.
+-r ../core/requirements.txt
