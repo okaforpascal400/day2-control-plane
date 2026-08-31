@@ -1,8 +1,9 @@
 # ROADMAP — day2-control-plane
 
-> **CURRENT: Phase 6 — MCP Server + Observability Copilot.** Claude Code: only
-> work the current phase. Update checkboxes in the completing PR. Pascal
-> approves phase transitions — Phase 7 does not start until he says so.
+> **Phase 6 is complete. NEXT: Phase 7 — DR + Audit + DAY2.md, not started.**
+> Claude Code: only work the current phase. Update checkboxes in the completing
+> PR. Pascal approves phase transitions — Phase 7 does not start until he says
+> so.
 
 ## Phase 0 — Environment
 - [x] WSL2 Ubuntu relocated to external SSD (`D:\wsl`)
@@ -109,9 +110,66 @@
   re-scan; `main`'s published images are verified unaffected. The bump is also a
   Debian 12 -> 13 jump wearing a digest bump's clothes.
 
-## Phase 6 — MCP Server + Observability Copilot
-- [ ] Read-only MCP: query_prometheus, search_logs, get_dashboard, read_runbook, git_history
-- [ ] Copilot interface with per-query audit logging
+## Phase 6 — MCP Server + Observability Copilot  ✅ COMPLETE
+- [x] Read-only MCP: query_prometheus, search_logs, get_dashboard, read_runbook,
+      git_history — plus `get_alerts`, added because "no alert fired" means
+      something different when no rule covers the condition.
+      `agents/copilot/mcp-server`, 84 tests. The ones that matter assert
+      *refusals*: SSRF to the metadata endpoint, traversal that beats a naive
+      prefix check, symlink escape, flag injection through a path, shell
+      metacharacters being inert, `git show HEAD:.env` refused, and a fail-red
+      guard that a handler returning a secret is cleaned at the chokepoint.
+      Six new scopes, every one a read; no new write exists in the vocabulary.
+- [x] Copilot interface with per-query audit logging
+      `agents/copilot` — chat runtime, CLI, stdlib-only web UI (chat + evidence
+      sidebar + replay tab), 72 tests. One audit entry per tool call *and* per
+      model call, `approved_by: null` throughout.
+- [x] **Signed answer receipts** (scope addition) — agent-agnostic schema,
+      hash-chained, Ed25519. `python -m copilot.verify` runs for someone with no
+      cluster, no API key and no access to the chat. Six live receipts committed
+      in `agents/copilot/evidence/`, **including two that record failures**;
+      the first five verify as one intact chain.
+- [x] **Incident replay** (scope addition) — a window reconstructed as a cited
+      timeline. Evidence gathering is scripted rather than model-driven, so
+      coverage is a property of the code and cost is fixed at one model call.
+      Verified against the real load window: **$0.0835**, 7 cited entries.
+
+**Live run, one chained session:** 5 answers, `PASS (attested)`, chain of 5
+intact, **$1.9123** of a $2.00 cap. Two supported with 9 and 5 citations; two
+unsupported and honest about why (tool-call ceiling; budget refusal). The
+latency question is the one worth reading — it **rejected the question's false
+premise** with evidence, checked that a log gap was a real absence rather than
+dropped ingestion, and narrowed its own conclusion after noticing a `truncated`
+result.
+
+**Measured cost, as a product fact:** a thorough investigation is **~$0.47**
+(five runs behind that figure); a replay is **$0.0835**. So a $0.50 session cap
+buys one deep question, not four — which is why the demo runs at $2.00.
+
+**Phase 6 cost: $6.9822**, every figure read from an audit trail. That is well
+over the $0.35-1.05 originally estimated, and the overrun has two causes worth
+separating: **$3.25 went on six runs that found five defects** (three in the
+spend cap itself), and **the overrun was observed at run 3 and not reported
+until run 6**. The reporting failure is recorded in `agents/README.md` ahead of
+the technical ones. A later running total given to the director was also short
+by $0.8019 — corrected here.
+
+Running total across Phases 4-6: **$7.7192**.
+
+- Five defects found by running it, all in `agents/README.md`:
+  the spend cap was a report rather than a control ($1.1819 against a $0.50
+  cap); the token estimate was 3x low; output exceeds `max_tokens` because
+  adaptive thinking bills as output; a trim marker inside a `tool_result` that
+  the API rejects; and a loop exit that left `tool_use` blocks unanswered,
+  breaking every *later* question in a session with the symptom nowhere near the
+  cause. Each has a regression test.
+- Found while building it, and fixed in this branch: promtail had been `0/1
+  Running` for ~45 hours with nothing alerting — `deploy/observability` now has
+  a `day2.observability` rule group, verified by evaluating the new expression
+  against recorded history.
+- Carried out: [#32](https://github.com/okaforpascal400/day2-control-plane/issues/32) — `JobQueueStuck` and `HighApiErrorRate`
+  reference series that do not exist, so both evaluate to an empty vector and
+  cannot fire. Phase 3 debt, recorded rather than fixed here.
 
 ## Phase 7 — DR + Audit + DAY2.md
 - [ ] Postgres backups to S3 + tested restore; RUNBOOK.md; RTO/RPO

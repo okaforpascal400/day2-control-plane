@@ -284,6 +284,40 @@ works — they assert that it **refuses**: that `main` is unwritable, that a dif
 touching `.github/` is rejected whole, that a hallucinated patch never reaches a
 branch, that merging raises no matter how it is called.
 
+### The Copilot against the six pillars
+
+The copilot is the read-only pillar's showcase, and it is where the
+output-verification pillar stops being about parsing and starts being about
+*evidence*. Its scopes and its receipts are the two halves of that.
+
+| Pillar | How the copilot embodies it |
+|---|---|
+| **Least-privilege** | Six declared actions, and **every one is a read**: `query_metrics`, `search_logs`, `read_alerts`, `read_dashboard`, `read_runbook`, `read_git_history`. There is deliberately no `silence_alert`, no `edit_dashboard`, no `exec_in_pod` — the copilot can observe the system and cannot touch it, and that is a property of the vocabulary rather than of its good behaviour. Two tests enforce it: one asserts every tool's scope name is a read, the other that the copilot holds none of the repository write scopes. |
+| **Sandboxed execution** | Three independent boundaries. `http.py` can construct only `GET` (hardcoded, no override parameter), refuses redirects, and blocks the mutating and configuration endpoints on backends it legitimately reads. `git.py` runs an argv list with `shell=False`, an allowlist of three subcommands, every flag chosen in-process, and `GIT_CONFIG_GLOBAL=/dev/null` — and refuses `ref:path` blob syntax so `git show` cannot read a file around the path jail. `files.py` resolves before checking containment, so `..` and symlinks cannot walk out. |
+| **Audit trails** | One entry per tool call *and* per model call, written as it happens, with `approved_by: null` throughout. Each tool entry carries its provenance reference and how many redactions fired — a visible zero, so "found nothing" is distinguishable from "never ran". |
+| **Human-in-the-loop** | The copilot proposes no change, so there is nothing to approve — which is the strongest form of the pillar rather than an exemption from it. What it does instead is refuse to answer beyond its evidence: an uncited claim is marked `supported: false`, and that flag is inside the signed receipt. The human decides what to do; the copilot only establishes what is true. |
+| **Secrets via env/SSM only** | The API key is read from the environment at call time. The signing key lives outside the repo at `0600`, set at `os.open` before the file has content so it is never briefly world-readable; the public half is committed so anyone can verify. And a second half the other agents do not need: **redaction at the egress chokepoint**, because keeping secrets out of the environment is not enough if a read-only tool can read one back out of a log line and hand it to a model. |
+| **Output verification** | **This is what the receipts are.** For the other agents, verification means the output parses and the patch applies. Here the output is a *claim about a running system*, and the check is that every claim traces to a tool call that actually ran: citation ids in the answer are matched against what this question's tools produced, and an answer citing evidence that does not exist is flagged. The receipt then makes that durable — question, every tool call with a digest of the result the model saw, the answer, the cost, and the supported flag, hash-chained and Ed25519-signed. |
+
+**What a receipt does not claim, stated because the distinction is the whole
+value.** It proves integrity, origin and position: nothing has changed since
+signing, and receipt N cannot be removed or reordered without breaking every
+receipt after it. It does **not** prove the answer is correct — a signature over
+a lie is a signed lie — and checking that an answer cites real evidence is not
+checking that the evidence supports the claim. What it removes is the ability to
+quietly revise history afterwards, which is the failure mode that matters when
+an agent's output informs an operational decision and someone asks a week later
+what it actually saw.
+
+The proof that the receipts do not flatter the system is in
+[`copilot/evidence/`](copilot/evidence/): six committed receipts from real runs,
+**including two that record failures** — a question that hit the tool-call
+ceiling and one the budget refused. `python -m copilot.verify evidence/*.json`
+prints `PASS (attested)` for anyone, with no cluster, no API key and no access to
+the chat. During this phase exactly one flattering receipt was found — a failed
+replay that returned before re-signing and left `supported: true` — and it now
+has a test named after it.
+
 ### Platform-side controls
 
 Two controls live in GitHub's repository settings rather than in this repo. A
