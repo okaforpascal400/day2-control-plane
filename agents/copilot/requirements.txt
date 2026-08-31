@@ -1,0 +1,9 @@
+# Reuses agents/core, which pins the Claude client. Exact pins per CLAUDE.md
+# rule 2.
+-r ../core/requirements.txt
+
+# `cryptography` is the only dependency the copilot adds, and it is here for one
+# reason: Ed25519. A receipt has to be verifiable by someone who does NOT hold
+# the signing key, which rules out an HMAC/stdlib approach — verifying an HMAC
+# means sharing the secret, which would make every verifier able to forge.
+cryptography==50.0.1

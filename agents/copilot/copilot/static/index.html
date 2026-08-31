@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Observability Copilot</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#161920; --panel-2:#1c2029; --line:#252a35;
+  --text:#e6e9ef; --muted:#8b93a3; --faint:#5a6172;
+  --accent:#6aa3ff; --good:#4ec9a0; --warn:#e0a355; --bad:#e0645f;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;flex-direction:column;
+  background:var(--bg);color:var(--text);font:14px/1.55 var(--sans)}
+
+header{display:flex;align-items:center;gap:16px;padding:12px 20px;
+  border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em}
+header .dot{width:7px;height:7px;border-radius:50%;background:var(--good);
+  box-shadow:0 0 8px var(--good)}
+.tabs{display:flex;gap:2px;margin-left:8px}
+.tab{padding:5px 13px;border-radius:6px;cursor:pointer;color:var(--muted);
+  font-size:13px;font-weight:500;border:1px solid transparent}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--panel-2);color:var(--text);border-color:var(--line)}
+.spacer{flex:1}
+.budget{display:flex;align-items:center;gap:9px;font:12px var(--mono);color:var(--muted)}
+.bar{width:90px;height:5px;border-radius:3px;background:var(--panel-2);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);transition:width .4s ease}
+.bar.hot i{background:var(--warn)} .bar.over i{background:var(--bad)}
+
+main{flex:1;display:grid;grid-template-columns:1fr 400px;min-height:0}
+#left{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line)}
+#log{flex:1;overflow-y:auto;padding:22px 26px;scroll-behavior:smooth}
+#log::-webkit-scrollbar,#side::-webkit-scrollbar{width:9px}
+#log::-webkit-scrollbar-thumb,#side::-webkit-scrollbar-thumb{
+  background:var(--panel-2);border-radius:5px}
+
+.msg{margin-bottom:26px;max-width:760px}
+.msg.q .who{color:var(--accent)}
+.who{font:11px var(--mono);text-transform:uppercase;letter-spacing:.09em;
+  color:var(--faint);margin-bottom:7px}
+.bubble{white-space:pre-wrap;word-wrap:break-word}
+.msg.q .bubble{color:var(--text);font-weight:500}
+.meta{margin-top:11px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  font:11px var(--mono);color:var(--faint)}
+.badge{padding:2px 8px;border-radius:11px;font:11px var(--mono);border:1px solid}
+.badge.ok{color:var(--good);border-color:#25503f;background:#12241d}
+.badge.no{color:var(--bad);border-color:#57292a;background:#241416}
+.reason{color:var(--bad);font-size:12px;margin-top:7px;line-height:1.5}
+.cite{color:var(--accent);cursor:pointer;border-bottom:1px dotted currentColor;
+  font:12px var(--mono)}
+.cite:hover{background:#1b2740}
+button.link{background:none;border:none;color:var(--faint);cursor:pointer;
+  font:11px var(--mono);padding:0;text-decoration:underline}
+button.link:hover{color:var(--accent)}
+
+form{display:flex;gap:10px;padding:16px 26px;border-top:1px solid var(--line);
+  background:var(--panel)}
+input[type=text]{flex:1;background:var(--bg);border:1px solid var(--line);
+  color:var(--text);padding:11px 14px;border-radius:8px;font:14px var(--sans);outline:none}
+input[type=text]:focus{border-color:var(--accent)}
+button.go{background:var(--accent);border:none;color:#0b1220;font-weight:600;
+  padding:0 20px;border-radius:8px;cursor:pointer;font-size:13px}
+button.go:disabled{opacity:.45;cursor:default}
+
+#side{background:var(--panel);overflow-y:auto;padding:18px}
+#side h2{margin:0 0 4px;font:11px var(--mono);text-transform:uppercase;
+  letter-spacing:.09em;color:var(--faint);font-weight:500}
+.hint{color:var(--faint);font-size:12px;margin-bottom:14px}
+.ev{border:1px solid var(--line);border-radius:9px;padding:11px 12px;
+  margin-bottom:9px;background:var(--panel-2);transition:border-color .25s,box-shadow .25s}
+.ev.hit{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.ev.err{border-color:#57292a}
+.ev .tool{font:12px var(--mono);color:var(--text);font-weight:600}
+.ev .cid{font:10px var(--mono);color:var(--accent);float:right}
+.ev pre{margin:7px 0 0;font:11px/1.5 var(--mono);color:var(--muted);
+  white-space:pre-wrap;word-break:break-all}
+.ev .tags{margin-top:7px;display:flex;gap:5px;flex-wrap:wrap}
+.tag{font:10px var(--mono);padding:1px 6px;border-radius:9px;
+  background:#1a1e27;color:var(--faint);border:1px solid var(--line)}
+.tag.w{color:var(--warn);border-color:#4a3a22}
+.tag.e{color:var(--bad);border-color:#57292a}
+
+.tl{border-left:2px solid var(--line);margin:14px 0 0 8px;padding-left:0}
+.tl .item{position:relative;padding:0 0 20px 22px}
+.tl .item::before{content:"";position:absolute;left:-7px;top:5px;width:11px;height:11px;
+  border-radius:50%;background:var(--panel);border:2px solid var(--accent)}
+.tl .item.logs::before{border-color:var(--muted)}
+.tl .item.alerts::before{border-color:var(--warn)}
+.tl .item.deploy::before{border-color:var(--good)}
+.tl .t{font:11px var(--mono);color:var(--faint)}
+.tl .h{font-weight:600;margin:2px 0 3px}
+.tl .d{color:var(--muted);font-size:13px}
+.rowin{display:flex;gap:9px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.rowin input{background:var(--bg);border:1px solid var(--line);color:var(--text);
+  padding:8px 11px;border-radius:7px;font:12px var(--mono);outline:none}
+.rowin input:focus{border-color:var(--accent)}
+.empty{color:var(--faint);padding:34px 0;text-align:center;font-size:13px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--line);
+  border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.hidden{display:none!important}
+</style></head><body>
+
+<header>
+  <span class="dot"></span>
+  <h1>Observability Copilot</h1>
+  <div class="tabs">
+    <div class="tab on" data-tab="chat">Chat</div>
+    <div class="tab" data-tab="replay">Replay</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="budget">
+    <span id="spend">$0.0000</span>
+    <div class="bar" id="bar"><i style="width:0%"></i></div>
+    <span id="cap">/ $0.50</span>
+  </div>
+</header>
+
+<main>
+  <div id="left">
+    <div id="log">
+      <div class="empty" id="blank">
+        Ask about the running system — metrics, logs, alerts, dashboards, or why
+        a line of code is the way it is.<br><br>
+        Every answer cites the tool calls behind it.
+      </div>
+    </div>
+    <form id="ask">
+      <input type="text" id="q" placeholder="why did latency spike at 19:40?" autocomplete="off">
+      <button class="go" id="send">Ask</button>
+    </form>
+  </div>
+
+  <div id="side">
+    <h2>Evidence</h2>
+    <div class="hint" id="sidehint">The tool calls behind the latest answer.</div>
+    <div id="ev"></div>
+  </div>
+</main>
+
+<script>
+const $=s=>document.querySelector(s), el=(t,c)=>{const e=document.createElement(t);if(c)e.className=c;return e};
+let TAB="chat";
+
+function esc(s){return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
+
+function budget(s){
+  if(!s)return;
+  $("#spend").textContent="$"+s.total_usd.toFixed(4);
+  $("#cap").textContent="/ $"+s.budget_usd.toFixed(2);
+  const p=Math.min(100,100*s.total_usd/s.budget_usd), bar=$("#bar");
+  bar.querySelector("i").style.width=p+"%";
+  bar.className="bar"+(p>=100?" over":p>75?" hot":"");
+}
+
+// Citations in the answer become clickable and highlight their evidence card.
+function linkCites(t){
+  return esc(t).replace(/\[((?:prometheus|loki|repo|git):\d{8})\]/g,
+    (_,id)=>`<span class="cite" data-cite="${id}">[${id}]</span>`);
+}
+
+function renderEvidence(items){
+  const box=$("#ev"); box.innerHTML="";
+  if(!items||!items.length){box.innerHTML='<div class="empty">No tool calls.</div>';return}
+  for(const e of items){
+    const d=el("div","ev"+(e.is_error?" err":"")); d.dataset.cite=e.citation_id||"";
+    let h=`<span class="cid">${e.citation_id||""}</span><span class="tool">${esc(e.tool)}</span>`;
+    h+=`<pre>${esc(JSON.stringify(e.arguments))}</pre>`;
+    if(e.is_error) h+=`<pre style="color:var(--bad)">${esc(e.error)}</pre>`;
+    else if(e.provenance&&e.provenance.query)
+      h+=`<pre>${esc(String(e.provenance.query).slice(0,220))}</pre>`;
+    const tags=[];
+    if(e.elapsed_ms!=null)tags.push(`<span class="tag">${e.elapsed_ms}ms</span>`);
+    if(e.redactions)tags.push(`<span class="tag w">${e.redactions} redacted</span>`);
+    if(e.truncated)tags.push(`<span class="tag w">truncated</span>`);
+    if(e.is_error)tags.push(`<span class="tag e">error</span>`);
+    h+=`<div class="tags">${tags.join("")}</div>`;
+    d.innerHTML=h; box.appendChild(d);
+  }
+}
+
+function addTurn(t){
+  $("#blank")?.remove();
+  const log=$("#log");
+  const q=el("div","msg q"); q.innerHTML=`<div class="who">You</div><div class="bubble">${esc(t.question)}</div>`;
+  log.appendChild(q);
+
+  const a=el("div","msg a");
+  let h=`<div class="who">Copilot</div><div class="bubble">${linkCites(t.answer)}</div>`;
+  h+=`<div class="meta">`;
+  h+=t.supported?`<span class="badge ok">supported · ${t.citations.length} cited</span>`
+                :`<span class="badge no">unsupported</span>`;
+  h+=`<span>$${t.cost_usd.toFixed(4)}</span><span>${t.elapsed_ms}ms</span>`;
+  h+=`<span>${t.evidence.length} tool calls</span>`;
+  h+=`<button class="link" data-dl="${t.sequence}">export receipt</button></div>`;
+  if(!t.supported&&t.unsupported_reason) h+=`<div class="reason">${esc(t.unsupported_reason)}</div>`;
+  a.innerHTML=h; log.appendChild(a);
+  log.scrollTop=log.scrollHeight;
+  renderEvidence(t.evidence); budget(t.session);
+}
+
+async function ask(question){
+  const send=$("#send"); send.disabled=true; send.innerHTML='<span class="spin"></span>';
+  try{
+    const r=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({question})});
+    const t=await r.json();
+    if(t.error){
+      $("#blank")?.remove();
+      const d=el("div","msg a");
+      d.innerHTML=`<div class="who">Copilot</div><div class="reason">${esc(t.error)}</div>`;
+      $("#log").appendChild(d);
+    } else addTurn(t);
+  } finally { send.disabled=false; send.textContent="Ask"; }
+}
+
+function renderReplay(r){
+  const log=$("#log"); log.innerHTML="";
+  if(r.error){log.innerHTML=`<div class="msg a"><div class="reason">${esc(r.error)}</div></div>`;return}
+  const w=r.window, box=el("div","msg a");
+  let h=`<div class="who">Replay · ${esc(w.start)} → ${esc(w.end)}</div>`;
+  h+=`<div class="bubble">${esc(r.summary)}</div>`;
+  if(r.timeline.length){
+    h+=`<div class="tl">`;
+    for(const e of r.timeline){
+      h+=`<div class="item ${esc(e.source)}"><div class="t">${esc(e.timestamp)}</div>`;
+      h+=`<div class="h">${esc(e.headline)}</div><div class="d">${esc(e.detail)}</div>`;
+      h+=`<div class="t"><span class="cite" data-cite="${esc(e.citation_id)}">[${esc(e.citation_id)}]</span></div></div>`;
+    }
+    h+=`</div>`;
+  } else h+=`<div class="empty">No timeline entries for this window.</div>`;
+  if(r.conclusion) h+=`<div class="bubble" style="margin-top:14px"><b>Conclusion.</b> ${esc(r.conclusion)}</div>`;
+  if(r.dropped_uncited_entries&&r.dropped_uncited_entries.length)
+    h+=`<div class="reason">${r.dropped_uncited_entries.length} entry(ies) dropped for citing evidence this replay did not produce.</div>`;
+  const t=r.turn;
+  if(t){
+    h+=`<div class="meta">`;
+    h+=t.supported?`<span class="badge ok">supported · ${t.citations.length} cited</span>`
+                  :`<span class="badge no">unsupported</span>`;
+    h+=`<span>$${t.cost_usd.toFixed(4)}</span><span>${t.elapsed_ms}ms</span>`;
+    h+=`<button class="link" data-dl="${t.sequence}">export receipt</button></div>`;
+    if(!t.supported&&t.unsupported_reason)h+=`<div class="reason">${esc(t.unsupported_reason)}</div>`;
+  }
+  box.innerHTML=h; log.appendChild(box);
+  if(t){renderEvidence(t.evidence); budget(t.session);}
+}
+
+async function replay(start,end){
+  const send=$("#send"); send.disabled=true; send.innerHTML='<span class="spin"></span>';
+  $("#log").innerHTML='<div class="empty">Gathering metrics, logs, alerts and deploys…</div>';
+  try{
+    const r=await fetch("/api/replay",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({start,end})});
+    renderReplay(await r.json());
+  } finally { send.disabled=false; send.textContent="Run"; }
+}
+
+function setTab(name){
+  TAB=name;
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("on",t.dataset.tab===name));
+  const form=$("#ask");
+  if(name==="chat"){
+    form.innerHTML=`<input type="text" id="q" placeholder="why did latency spike at 19:40?" autocomplete="off">
+      <button class="go" id="send">Ask</button>`;
+    $("#log").innerHTML=`<div class="empty" id="blank">Ask about the running system — metrics, logs,
+      alerts, dashboards, or why a line of code is the way it is.<br><br>
+      Every answer cites the tool calls behind it.</div>`;
+  }else{
+    const now=new Date(), then=new Date(now-60*60*1000), f=d=>d.toISOString().slice(0,19)+"Z";
+    form.innerHTML=`<div class="rowin" style="flex:1;margin:0">
+      <input type="text" id="s" value="${f(then)}"><span style="color:var(--faint)">→</span>
+      <input type="text" id="e" value="${f(now)}"></div><button class="go" id="send">Run</button>`;
+    $("#log").innerHTML=`<div class="empty">Pick a window and run a replay.<br><br>
+      Metrics, logs, alert state and deploys are gathered, then ordered into a cited timeline.</div>`;
+  }
+  $("#ev").innerHTML=""; $("#q")?.focus();
+}
+
+document.addEventListener("click",e=>{
+  const tab=e.target.closest(".tab"); if(tab){setTab(tab.dataset.tab);return}
+  const dl=e.target.closest("[data-dl]");
+  if(dl){window.location=`/api/receipt/${dl.dataset.dl}`;return}
+  const c=e.target.closest("[data-cite]");
+  if(c&&c.dataset.cite){
+    document.querySelectorAll(".ev").forEach(x=>x.classList.remove("hit"));
+    const hit=document.querySelector(`.ev[data-cite="${c.dataset.cite}"]`);
+    if(hit){hit.classList.add("hit");hit.scrollIntoView({block:"center",behavior:"smooth"})}
+  }
+});
+
+document.addEventListener("submit",e=>{
+  e.preventDefault();
+  if(TAB==="chat"){
+    const v=$("#q").value.trim(); if(!v)return; $("#q").value=""; ask(v);
+  }else replay($("#s").value.trim(),$("#e").value.trim());
+});
+
+fetch("/api/state").then(r=>r.json()).then(s=>{
+  budget({total_usd:s.total_usd,budget_usd:s.budget_usd});
+  $("#sidehint").textContent=`${s.tools.length} read-only tools · key ${s.key_fingerprint}`;
+});
+</script></body></html>
