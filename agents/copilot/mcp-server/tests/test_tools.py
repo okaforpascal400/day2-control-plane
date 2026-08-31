@@ -397,9 +397,20 @@ def test_reading_a_real_dashboard_summarises_panels_not_layout(registry) -> None
 
 
 def test_reading_real_git_history(registry) -> None:
+    """Asserts the shape of what comes back, not how deep the clone is.
+
+    An earlier version required exactly three commits and went red in CI, where
+    `actions/checkout` makes a shallow clone with one. That was the test
+    measuring its environment rather than the tool — `max_count` is an upper
+    bound, and a repository with fewer commits than that is not a defect.
+    """
     result = registry.call("git_history", {"mode": "log", "max_count": 3})
 
-    assert result["commit_count"] == 3
+    assert not result.get("is_error"), result.get("error")
+    assert 1 <= result["commit_count"] <= 3
+    assert result["commit_count"] == len(result["commits"])
     assert all(len(c["sha"]) == 40 for c in result["commits"])
+    assert all(c["short_sha"] == c["sha"][:7] for c in result["commits"])
     assert all(c["subject"] for c in result["commits"])
+    assert all(c["date"] for c in result["commits"])
     assert result["provenance"]["source"] == "git"
