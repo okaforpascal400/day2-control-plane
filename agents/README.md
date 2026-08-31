@@ -284,6 +284,40 @@ works — they assert that it **refuses**: that `main` is unwritable, that a dif
 touching `.github/` is rejected whole, that a hallucinated patch never reaches a
 branch, that merging raises no matter how it is called.
 
+### The Copilot against the six pillars
+
+The copilot is the read-only pillar's showcase, and it is where the
+output-verification pillar stops being about parsing and starts being about
+*evidence*. Its scopes and its receipts are the two halves of that.
+
+| Pillar | How the copilot embodies it |
+|---|---|
+| **Least-privilege** | Six declared actions, and **every one is a read**: `query_metrics`, `search_logs`, `read_alerts`, `read_dashboard`, `read_runbook`, `read_git_history`. There is deliberately no `silence_alert`, no `edit_dashboard`, no `exec_in_pod` — the copilot can observe the system and cannot touch it, and that is a property of the vocabulary rather than of its good behaviour. Two tests enforce it: one asserts every tool's scope name is a read, the other that the copilot holds none of the repository write scopes. |
+| **Sandboxed execution** | Three independent boundaries. `http.py` can construct only `GET` (hardcoded, no override parameter), refuses redirects, and blocks the mutating and configuration endpoints on backends it legitimately reads. `git.py` runs an argv list with `shell=False`, an allowlist of three subcommands, every flag chosen in-process, and `GIT_CONFIG_GLOBAL=/dev/null` — and refuses `ref:path` blob syntax so `git show` cannot read a file around the path jail. `files.py` resolves before checking containment, so `..` and symlinks cannot walk out. |
+| **Audit trails** | One entry per tool call *and* per model call, written as it happens, with `approved_by: null` throughout. Each tool entry carries its provenance reference and how many redactions fired — a visible zero, so "found nothing" is distinguishable from "never ran". |
+| **Human-in-the-loop** | The copilot proposes no change, so there is nothing to approve — which is the strongest form of the pillar rather than an exemption from it. What it does instead is refuse to answer beyond its evidence: an uncited claim is marked `supported: false`, and that flag is inside the signed receipt. The human decides what to do; the copilot only establishes what is true. |
+| **Secrets via env/SSM only** | The API key is read from the environment at call time. The signing key lives outside the repo at `0600`, set at `os.open` before the file has content so it is never briefly world-readable; the public half is committed so anyone can verify. And a second half the other agents do not need: **redaction at the egress chokepoint**, because keeping secrets out of the environment is not enough if a read-only tool can read one back out of a log line and hand it to a model. |
+| **Output verification** | **This is what the receipts are.** For the other agents, verification means the output parses and the patch applies. Here the output is a *claim about a running system*, and the check is that every claim traces to a tool call that actually ran: citation ids in the answer are matched against what this question's tools produced, and an answer citing evidence that does not exist is flagged. The receipt then makes that durable — question, every tool call with a digest of the result the model saw, the answer, the cost, and the supported flag, hash-chained and Ed25519-signed. |
+
+**What a receipt does not claim, stated because the distinction is the whole
+value.** It proves integrity, origin and position: nothing has changed since
+signing, and receipt N cannot be removed or reordered without breaking every
+receipt after it. It does **not** prove the answer is correct — a signature over
+a lie is a signed lie — and checking that an answer cites real evidence is not
+checking that the evidence supports the claim. What it removes is the ability to
+quietly revise history afterwards, which is the failure mode that matters when
+an agent's output informs an operational decision and someone asks a week later
+what it actually saw.
+
+The proof that the receipts do not flatter the system is in
+[`copilot/evidence/`](copilot/evidence/): six committed receipts from real runs,
+**including two that record failures** — a question that hit the tool-call
+ceiling and one the budget refused. `python -m copilot.verify evidence/*.json`
+prints `PASS (attested)` for anyone, with no cluster, no API key and no access to
+the chat. During this phase exactly one flattering receipt was found — a failed
+replay that returned before re-signing and left `supported: true` — and it now
+has a test named after it.
+
 ### Platform-side controls
 
 Two controls live in GitHub's repository settings rather than in this repo. A
@@ -862,11 +896,146 @@ cd agents/cve-response && pytest -q   # grouping, dedupe, the three endings
 cd agents/upgrade      && pytest -q   # the skips, the contract, the refusals
 ```
 
-All four run in CI as `pytest (agents/<package>)`, and publishing images is
-gated on them.
+```bash
+cd agents/copilot            && pytest -q   # runtime, budget, receipts, replay
+cd agents/copilot/mcp-server && pytest -q   # read-only guarantees, redaction
+```
+
+All six run in CI as `pytest (agents/<package>)`, and publishing images is
+gated on them. The copilot pair were added to that matrix in Phase 6: their
+suites are where the read-only and redaction guarantees live — the tests that
+assert the server *refuses* SSRF, path traversal that beats a naive prefix
+check, symlink escape, flag injection through a git path, and a handler that
+tries to return a secret — so they gate publishing exactly like the rest.
 
 The CVE suite installs an autouse fixture that replaces the registry resolver.
 The first draft made real Docker Hub calls from the test suite — 10.8s of
 network per run, and a CI job that would go red on an upstream rate limit
 rather than on a defect. Nothing is mocked beyond the socket: the module's own
 parsing and rendering still run.
+
+---
+
+## The Observability Copilot (Phase 6)
+
+Six read-only MCP tools, a chat runtime that must cite what it read, signed
+answer receipts, and incident replay. The governance story is in
+`agents/copilot/mcp-server/day2_mcp/server.py` (the chokepoint), `redaction.py`
+(the egress boundary) and `receipts.py` (what a receipt does and does not
+prove).
+
+### The measured cost of a deep investigation: ~$0.47
+
+Not an estimate. A thorough question — one that queries Prometheus over several
+windows, searches Loki, checks alert state and reads the repository — costs
+**about $0.47** and makes 7-12 tool calls across 6-7 model turns.
+
+| Run | Question | Cost | Outcome |
+|---|---|---|---|
+| `audit5` | "why did latency spike at 21:08" | **$0.4672** | supported, 1 citation |
+| `audit6` | same question, caching fixed | **$0.4905** | supported |
+| `demo2` seq 0 | same question | **$0.4432** | supported, 9 citations |
+| `demo2` seq 2 | "why FOR UPDATE SKIP LOCKED" | **$0.4632** | supported, 5 citations |
+| `demo2` seq 4 | replay of a 10-minute window | **$0.0835** | one model call, fixed cost |
+
+Two things follow that are worth knowing before pointing this at a cluster.
+
+**A replay is an order of magnitude cheaper than a question** ($0.08 against
+$0.47) because its evidence gathering is scripted rather than model-driven: a
+fixed set of tool calls and exactly one narration call. Cost is a design
+consequence, not a coincidence.
+
+**A $0.50 session cap buys one thorough investigation, not four.** That is why
+the chained demo runs at $2.00. Sizing a cap without this number would produce
+either a cap that never binds or one that cuts every session in half.
+
+### The overspend, and what it cost to learn
+
+The first live run cost **$1.1819 against a $0.50 cap** and produced no answer.
+The cap failed as a control. Recorded here in full because a demo that only
+shows the working version has not tested anything — the Phase 4 and 5 defect
+records exist for the same reason.
+
+| Run | Cost | Cap | Outcome |
+|---|---|---|---|
+| 1 | **$1.1819** | $0.50 | **cap breached 2.4x**, no answer |
+| 2 | $0.3022 | $0.50 | held; refused mid-question |
+| 3 | **$0.5326** | $0.50 | **cap breached** again |
+| smoke | $0.0446 | $0.15 | held; good answer |
+| 4 | $0.2348 | $0.50 | held; API 400 on a malformed transcript |
+| 5 | $0.4672 | $0.50 | held; supported answer |
+| 6 | $0.4905 | $0.50 | held; caching engaged |
+| **Total** | **$3.2537** | | against a $0.35-1.05 estimate |
+
+**The reporting failure comes first, because it is the one with a lesson beyond
+this codebase.** The estimate was $0.35-1.05 for the whole verification set. The
+overrun was visible after run 3 and was not reported until run 6. A budget
+overrun should be escalated when it is *observed*, not when the work happens to
+reach a natural reporting point — the director was funding runs without being
+told the estimate had already been passed.
+
+Three defects in the cap itself, each fixed with a regression test:
+
+1. **It was a report, not a control.** The check compared spend-so-far against
+   the budget *between* turns. A single turn's cost is unbounded, and from a
+   standing balance of $0.4516 one call cost $0.7303. Input tokens per turn ran
+   2,474 -> 6,867 -> 12,426 -> 20,545 -> 43,072 -> 69,284 -> **211,833**. Fixed
+   by pricing the next call *before* sending it and refusing if the worst case
+   would breach.
+
+2. **The estimate was 3x low.** A local characters-per-token heuristic returned
+   10,000 where the API's `count_tokens` returned 30,009 — under-counting, which
+   is the wrong direction for a cap, and how run 3 breached it after run 1 was
+   supposedly fixed. Replaced with `count_tokens`; the heuristic survives only
+   as a deliberately over-counting fallback.
+
+3. **Output can exceed `max_tokens`.** Adaptive thinking is on by default on
+   this model family and thinking bills as output, so a 2,000-token ceiling
+   returned 2,100, 3,288 and 4,057 output tokens on successive turns. Worst-case
+   pricing now applies a 3x overrun factor. Anyone porting a cost cap to Claude 5
+   needs this one: `max_tokens` is not a cost ceiling.
+
+Two further defects came out of the same runs, both in transcript handling:
+
+* A trim marker (`_trimmed`) stored inside a `tool_result` block — the API
+  rejects unknown keys there, and every later request failed with a 400.
+* Breaking out of the loop at the tool-call ceiling left the assistant's
+  `tool_use` blocks unanswered. The API rejects that on the *next* request, so
+  one question hitting the ceiling silently broke every later question in the
+  session, with the symptom nowhere near the cause.
+
+**The receipts never flattered any of this.** The overspent run produced a
+receipt that verifies `PASS (attested)` and records `supported: false` with the
+true $1.1819. One exception was found and fixed: a replay whose narration failed
+to parse returned before re-signing, leaving a receipt that claimed
+`supported: true` for a failed replay. That is exactly the defect this artifact
+must not have, and it now has a test named after it.
+
+### Phase 6 live run — one chained session
+
+Five answers, one receipt chain, `PASS (attested)` end to end, **$1.9123** of a
+$2.00 cap.
+
+| seq | mode | supported | citations | cost |
+|---|---|---|---|---|
+| 0 | chat | yes | 9 | $0.4432 |
+| 1 | chat | **no** — hit the 12-tool-call ceiling | 0 | $0.8841 |
+| 2 | chat | yes | 5 | $0.4632 |
+| 3 | chat | **no** — budget refused the next call | 0 | $0.0382 |
+| 4 | replay | yes | 7 (earlier run) | $0.0835 |
+
+The answer to "why did request latency spike around 21:08" is the one worth
+reading, because the question contained a false premise and the copilot refused
+it:
+
+> I can't confirm a latency spike at 21:08 — the metrics show something
+> different, and I'd be inventing a cause if I explained one. [...] the thing
+> that "starts" at 21:08 on the dashboard's latency panel is the series existing
+> at all, not a rise from a healthy baseline.
+
+It went on to check that the absence of logs was a real absence rather than
+dropped ingestion (citing the promtail readiness metric added in this same
+phase), noticed that one of its own log queries came back `truncated` and
+narrowed its conclusion accordingly, and labelled its closing paragraph as
+inference rather than observation. That is the behaviour the cited-or-flagged
+rule exists to produce.

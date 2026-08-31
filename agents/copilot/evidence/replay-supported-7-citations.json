@@ -1,0 +1,374 @@
+{
+  "receipt_version": "1.0",
+  "receipt_id": "55cf4d62-c0be-4488-b16d-3accc79c2665",
+  "session_id": "1e73755c-4866-4241-9ac7-81f6c42c081b",
+  "sequence": 1,
+  "timestamp": "2026-08-30T21:55:31+00:00",
+  "agent": {
+    "name": "day2-observability-copilot",
+    "version": "1.0"
+  },
+  "model": {
+    "id": "claude-opus-5",
+    "effort": "high",
+    "max_tokens": 2000
+  },
+  "question": "Replay the window 2026-08-30T21:05:00+00:00 to 2026-08-30T21:15:00+00:00",
+  "evidence": [
+    {
+      "index": 0,
+      "tool": "query_prometheus",
+      "arguments": {
+        "query": "sum(day2_job_queue_depth{status=\"pending\"})",
+        "start": "2026-08-30T21:05:00+00:00",
+        "end": "2026-08-30T21:15:00+00:00"
+      },
+      "result_digest": "sha256:0e9780aae37b9b6ef2c14359966cfbd2192730fe1863bf216b786f3fbb16fa37",
+      "citation_id": "prometheus:25551386",
+      "provenance": {
+        "source": "prometheus",
+        "query": "sum(day2_job_queue_depth{status=\"pending\"})",
+        "fetched_at": "2026-08-30T21:55:08+00:00",
+        "window": "2026-08-30T21:05:00+00:00..2026-08-30T21:15:00+00:00",
+        "endpoint": "http://localhost:9090",
+        "step": "15s"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 34,
+      "redactions": 0,
+      "truncated": false
+    },
+    {
+      "index": 1,
+      "tool": "query_prometheus",
+      "arguments": {
+        "query": "sum(day2_job_queue_depth{status=\"completed\"})",
+        "start": "2026-08-30T21:05:00+00:00",
+        "end": "2026-08-30T21:15:00+00:00"
+      },
+      "result_digest": "sha256:6aa2e1c0f32a85d9d8d8f436cdbd6fc18ffa4689351b5dccc7dcb3f4e6e6d8ec",
+      "citation_id": "prometheus:49649494",
+      "provenance": {
+        "source": "prometheus",
+        "query": "sum(day2_job_queue_depth{status=\"completed\"})",
+        "fetched_at": "2026-08-30T21:55:08+00:00",
+        "window": "2026-08-30T21:05:00+00:00..2026-08-30T21:15:00+00:00",
+        "endpoint": "http://localhost:9090",
+        "step": "15s"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 28,
+      "redactions": 0,
+      "truncated": false
+    },
+    {
+      "index": 2,
+      "tool": "query_prometheus",
+      "arguments": {
+        "query": "sum(rate(http_request_duration_highr_seconds_count[2m]))",
+        "start": "2026-08-30T21:05:00+00:00",
+        "end": "2026-08-30T21:15:00+00:00"
+      },
+      "result_digest": "sha256:bfcb461381e6c04cb8a8a56d8f50d41d1af58160618a9c8af26b36c70584ebd5",
+      "citation_id": "prometheus:89860371",
+      "provenance": {
+        "source": "prometheus",
+        "query": "sum(rate(http_request_duration_highr_seconds_count[2m]))",
+        "fetched_at": "2026-08-30T21:55:08+00:00",
+        "window": "2026-08-30T21:05:00+00:00..2026-08-30T21:15:00+00:00",
+        "endpoint": "http://localhost:9090",
+        "step": "15s"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 28,
+      "redactions": 0,
+      "truncated": false
+    },
+    {
+      "index": 3,
+      "tool": "query_prometheus",
+      "arguments": {
+        "query": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_highr_seconds_bucket[5m])))",
+        "start": "2026-08-30T21:05:00+00:00",
+        "end": "2026-08-30T21:15:00+00:00"
+      },
+      "result_digest": "sha256:7d1dba0884b9615223994239aa8a299a547a13903572f2e6d0ba94ae26d38786",
+      "citation_id": "prometheus:06503231",
+      "provenance": {
+        "source": "prometheus",
+        "query": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_highr_seconds_bucket[5m])))",
+        "fetched_at": "2026-08-30T21:55:08+00:00",
+        "window": "2026-08-30T21:05:00+00:00..2026-08-30T21:15:00+00:00",
+        "endpoint": "http://localhost:9090",
+        "step": "15s"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 24,
+      "redactions": 0,
+      "truncated": false
+    },
+    {
+      "index": 4,
+      "tool": "query_prometheus",
+      "arguments": {
+        "query": "histogram_quantile(0.95, sum by (le) (rate(day2_job_processing_seconds_bucket[5m])))",
+        "start": "2026-08-30T21:05:00+00:00",
+        "end": "2026-08-30T21:15:00+00:00"
+      },
+      "result_digest": "sha256:fe15c6aaded9f2c3fd4287486ead1150b6c03a269f350ce6e001a602753db055",
+      "citation_id": "prometheus:62975074",
+      "provenance": {
+        "source": "prometheus",
+        "query": "histogram_quantile(0.95, sum by (le) (rate(day2_job_processing_seconds_bucket[5m])))",
+        "fetched_at": "2026-08-30T21:55:08+00:00",
+        "window": "2026-08-30T21:05:00+00:00..2026-08-30T21:15:00+00:00",
+        "endpoint": "http://localhost:9090",
+        "step": "15s"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 27,
+      "redactions": 0,
+      "truncated": false
+    },
+    {
+      "index": 5,
+      "tool": "search_logs",
+      "arguments": {
+        "query": "{namespace=\"default\"} |~ \"(?i)error|warn|exception|fail\"",
+        "start": "2026-08-30T21:05:00+00:00",
+        "end": "2026-08-30T21:15:00+00:00",
+        "limit": 60
+      },
+      "result_digest": "sha256:cfd3ccabdfd033e8090e5a47e2a4ae4451c35b66e23198956b53a00f51002fa4",
+      "citation_id": "loki:98206949",
+      "provenance": {
+        "source": "loki",
+        "query": "{namespace=\"default\"} |~ \"(?i)error|warn|exception|fail\"",
+        "fetched_at": "2026-08-30T21:55:08+00:00",
+        "window": "2026-08-30T21:05:00+00:00..2026-08-30T21:15:00+00:00",
+        "endpoint": "http://localhost:3100",
+        "limit": 60,
+        "direction": "backward"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 96,
+      "redactions": 0,
+      "truncated": false
+    },
+    {
+      "index": 6,
+      "tool": "search_logs",
+      "arguments": {
+        "query": "{namespace=\"default\"}",
+        "start": "2026-08-30T21:05:00+00:00",
+        "end": "2026-08-30T21:15:00+00:00",
+        "limit": 60
+      },
+      "result_digest": "sha256:cd3e08274dfacceef13b4803c1c322bfb2e73f8ddb19431b25879e3e19c7ffeb",
+      "citation_id": "loki:94030014",
+      "provenance": {
+        "source": "loki",
+        "query": "{namespace=\"default\"}",
+        "fetched_at": "2026-08-30T21:55:08+00:00",
+        "window": "2026-08-30T21:05:00+00:00..2026-08-30T21:15:00+00:00",
+        "endpoint": "http://localhost:3100",
+        "limit": 60,
+        "direction": "backward"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 38,
+      "redactions": 0,
+      "truncated": true
+    },
+    {
+      "index": 7,
+      "tool": "get_alerts",
+      "arguments": {},
+      "result_digest": "sha256:e03774fe6d1a06e2ad953daffe28966afccf69b333294c3ee4daf5f5ea6437d2",
+      "citation_id": "prometheus:34567557",
+      "provenance": {
+        "source": "prometheus",
+        "query": "/api/v1/alerts + /api/v1/rules",
+        "fetched_at": "2026-08-30T21:55:08+00:00",
+        "endpoint": "http://localhost:9090"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 34,
+      "redactions": 0,
+      "truncated": false
+    },
+    {
+      "index": 8,
+      "tool": "git_history",
+      "arguments": {
+        "mode": "log",
+        "max_count": 40
+      },
+      "result_digest": "sha256:961b2937eb5133ce417d911be19ccd865a0b5a3f667de4c7721a9e883e520676",
+      "citation_id": "git:73926601",
+      "provenance": {
+        "source": "git",
+        "query": "git log --max-count=40",
+        "fetched_at": "2026-08-30T21:55:08+00:00",
+        "endpoint": "/home/pascal/projects/day2-control-plane"
+      },
+      "is_error": false,
+      "error": null,
+      "elapsed_ms": 38,
+      "redactions": 1,
+      "truncated": true
+    }
+  ],
+  "answer": {
+    "text": "Between 21:05 and 21:15 the system went through a short traffic burst: request rate rose from zero at 21:07:30, peaked near 29 req/s at 21:11, and fell back to zero by 21:14. Pending job queue depth climbed from 0 to a peak of 1310 at 21:12 and was draining (610) by window end, while completed jobs rose from 3228 to 5056. Latency stayed essentially flat, no error/warning logs were present, no alerts were firing, and no deploys landed.",
+    "citations": [
+      "loki:94030014",
+      "loki:98206949",
+      "prometheus:06503231",
+      "prometheus:25551386",
+      "prometheus:49649494",
+      "prometheus:62975074",
+      "prometheus:89860371"
+    ],
+    "supported": true,
+    "unsupported_reason": null
+  },
+  "cost": {
+    "currency": "USD",
+    "amount": 0.09433,
+    "input_tokens": 8881,
+    "output_tokens": 1997,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "model_calls": 1
+  },
+  "chain": {
+    "sequence": 1,
+    "previous_digest": "sha256:b31464ca446a82e1fee597737c3fe6e928acdc15164ce8de95a29c04efd8102a"
+  },
+  "extensions": {
+    "copilot": {
+      "mode": "replay",
+      "elapsed_ms": 23220,
+      "session_total_usd": 0.8019,
+      "replay": {
+        "window": {
+          "start": "2026-08-30T21:05:00+00:00",
+          "end": "2026-08-30T21:15:00+00:00",
+          "duration_seconds": 600
+        },
+        "summary": "Between 21:05 and 21:15 the system went through a short traffic burst: request rate rose from zero at 21:07:30, peaked near 29 req/s at 21:11, and fell back to zero by 21:14. Pending job queue depth climbed from 0 to a peak of 1310 at 21:12 and was draining (610) by window end, while completed jobs rose from 3228 to 5056. Latency stayed essentially flat, no error/warning logs were present, no alerts were firing, and no deploys landed.",
+        "conclusion": "The evidence shows a bounded traffic burst (21:07:30–21:14) coinciding with a pending-job backlog that peaked at 21:12 and was draining by 21:15, with per-job and per-request latencies essentially unchanged, no error logs, no firing alerts (prometheus:34567557), and no commits deployed (git:73926601). The correlation between the request-rate burst and the queue build-up is consistent with load-driven queuing, but the evidence does not establish a causal link or any fault; nothing in this window indicates a failure requiring action.",
+        "timeline": [
+          {
+            "timestamp": "2026-08-30T21:05:00+00:00",
+            "source": "metrics",
+            "headline": "Window opened with an empty pending queue",
+            "detail": "Pending job queue depth was 0 and request rate was 0 at the start of the window, establishing the baseline.",
+            "citation_id": "prometheus:25551386"
+          },
+          {
+            "timestamp": "2026-08-30T21:07:00+00:00",
+            "source": "metrics",
+            "headline": "Pending queue rose above baseline to 32",
+            "detail": "The first rise in pending jobs marks the start of the backlog build-up.",
+            "citation_id": "prometheus:25551386"
+          },
+          {
+            "timestamp": "2026-08-30T21:07:00+00:00",
+            "source": "metrics",
+            "headline": "Job processing p95 sat at 0.4875s",
+            "detail": "Worker-side processing latency at the start of the burst, effectively at its flat baseline.",
+            "citation_id": "prometheus:62975074"
+          },
+          {
+            "timestamp": "2026-08-30T21:07:30+00:00",
+            "source": "metrics",
+            "headline": "Request rate lifted off zero to 7.4 req/s",
+            "detail": "HTTP traffic began at roughly the same time as the queue started to fill.",
+            "citation_id": "prometheus:89860371"
+          },
+          {
+            "timestamp": "2026-08-30T21:09:00+00:00",
+            "source": "metrics",
+            "headline": "p95 request latency peaked at 0.683s",
+            "detail": "The API latency high point during the burst; the change from the 0.6785s starting value was marginal.",
+            "citation_id": "prometheus:06503231"
+          },
+          {
+            "timestamp": "2026-08-30T21:09:00+00:00",
+            "source": "metrics",
+            "headline": "Job processing p95 peaked at 0.488s",
+            "detail": "Worker processing time barely moved, indicating jobs were not individually slower during the backlog.",
+            "citation_id": "prometheus:62975074"
+          },
+          {
+            "timestamp": "2026-08-30T21:11:00+00:00",
+            "source": "metrics",
+            "headline": "Request rate peaked at 29.1 req/s",
+            "detail": "The top of the traffic burst, roughly a minute before the pending queue peaked.",
+            "citation_id": "prometheus:89860371"
+          },
+          {
+            "timestamp": "2026-08-30T21:12:00+00:00",
+            "source": "metrics",
+            "headline": "Pending queue peaked at 1310 jobs",
+            "detail": "Maximum backlog for the window, reached shortly after peak request rate.",
+            "citation_id": "prometheus:25551386"
+          },
+          {
+            "timestamp": "2026-08-30T21:13:30+00:00",
+            "source": "metrics",
+            "headline": "Job processing p95 returned to baseline",
+            "detail": "Processing latency settled back at 0.4875s as the burst subsided.",
+            "citation_id": "prometheus:62975074"
+          },
+          {
+            "timestamp": "2026-08-30T21:14:00+00:00",
+            "source": "metrics",
+            "headline": "Request rate returned to zero",
+            "detail": "Incoming traffic stopped, leaving only the accumulated backlog to drain.",
+            "citation_id": "prometheus:89860371"
+          },
+          {
+            "timestamp": "2026-08-30T21:14:57.964388+00:00",
+            "source": "logs",
+            "headline": "Worker claimed a batch of index_item jobs",
+            "detail": "day2-worker-75d7d45556-qrrr6 claimed jobs 5057-5066 in a single burst at attempt 1, all INFO level.",
+            "citation_id": "loki:94030014"
+          },
+          {
+            "timestamp": "2026-08-30T21:14:59.998365+00:00",
+            "source": "logs",
+            "headline": "Worker completed jobs at ~250ms each with no errors",
+            "detail": "Job 5064 and its neighbours completed in roughly 250ms; the error/warning log query returned zero lines for the window.",
+            "citation_id": "loki:98206949"
+          },
+          {
+            "timestamp": "2026-08-30T21:15:00+00:00",
+            "source": "metrics",
+            "headline": "Completed jobs peaked at 5056 as pending fell to 610",
+            "detail": "Completed count rose from 3228 at window start to 5056, while pending dropped from its 1310 peak to 610 — the backlog was draining at window close.",
+            "citation_id": "prometheus:49649494"
+          }
+        ],
+        "dropped_uncited_entries": []
+      }
+    }
+  },
+  "signature": {
+    "algorithm": "Ed25519",
+    "public_key": "dopKvafiLSV24gMnv+wbQsG4v+x/Gq9fp6COcE8laj8=",
+    "key_fingerprint": "75a92eccca8a3598",
+    "payload_digest": "sha256:99f37b75665526cadd6de01d1fd6feced12480e7bf5a0d76b563bc5ba64e95c9",
+    "value": "m4d//dvVUvTXrRuXPjlAiTkL3AW+OVfuivrc+xWIl8iEuIPEx6EZMQj13OBQ9tpbDr5FdZ6h8naIIZVTwjCqAw=="
+  }
+}

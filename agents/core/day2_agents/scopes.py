@@ -48,6 +48,19 @@ class Action(StrEnum):
     OPEN_ISSUE = "open_issue"  # file a diagnosis when there is no clean fix
     COMMENT_ON_PR = "comment_on_pr"  # annotate someone else's PR, in its thread
 
+    # Added in Phase 6, for the Observability Copilot's MCP server. Every one
+    # of these is a *read* of an operational surface — there is deliberately no
+    # counterpart that writes to any of them. There is no `write_metrics`, no
+    # `silence_alert`, no `edit_dashboard`, no `exec_in_pod`: the copilot can
+    # observe the system and cannot touch it, and that is enforced by the
+    # vocabulary rather than by the copilot's good behaviour.
+    QUERY_METRICS = "query_metrics"  # PromQL against Prometheus, reads only
+    SEARCH_LOGS = "search_logs"  # LogQL against Loki, reads only
+    READ_DASHBOARD = "read_dashboard"  # dashboard JSON as committed to the repo
+    READ_RUNBOOK = "read_runbook"  # markdown under docs/, path-jailed
+    READ_GIT_HISTORY = "read_git_history"  # log/show/blame on this repo
+    READ_ALERTS = "read_alerts"  # firing + pending alerts and their rules
+
 
 class PermissionDenied(RuntimeError):
     """Raised when an agent attempts an action it did not declare."""
