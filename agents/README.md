@@ -896,8 +896,17 @@ cd agents/cve-response && pytest -q   # grouping, dedupe, the three endings
 cd agents/upgrade      && pytest -q   # the skips, the contract, the refusals
 ```
 
-All four run in CI as `pytest (agents/<package>)`, and publishing images is
-gated on them.
+```bash
+cd agents/copilot            && pytest -q   # runtime, budget, receipts, replay
+cd agents/copilot/mcp-server && pytest -q   # read-only guarantees, redaction
+```
+
+All six run in CI as `pytest (agents/<package>)`, and publishing images is
+gated on them. The copilot pair were added to that matrix in Phase 6: their
+suites are where the read-only and redaction guarantees live — the tests that
+assert the server *refuses* SSRF, path traversal that beats a naive prefix
+check, symlink escape, flag injection through a git path, and a handler that
+tries to return a secret — so they gate publishing exactly like the rest.
 
 The CVE suite installs an autouse fixture that replaces the registry resolver.
 The first draft made real Docker Hub calls from the test suite — 10.8s of

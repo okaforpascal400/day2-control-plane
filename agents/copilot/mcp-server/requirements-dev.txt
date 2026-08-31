@@ -1,0 +1,7 @@
+# The MCP server itself takes no third-party runtime dependency — it is standard
+# library only, which is what makes "GET is the only verb this can construct"
+# checkable by reading one short file. `day2_agents` (scopes, audit) comes from
+# ../../core on the pytest path.
+-r ../../core/requirements.txt
+pytest==9.1.1
+ruff==0.15.22
