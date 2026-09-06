@@ -27,6 +27,15 @@ FROM ${NGINX_IMAGE} AS runtime
 USER root
 RUN apk add --no-cache --upgrade libssl3 libcrypto3
 
+# Same base-image lag: nginx-unprivileged:1.31-alpine still ships util-linux's
+# libuuid 2.42.1-r0, carrying a fixable HIGH (CVE-2026-76642, a failed external
+# mount helper still runs privileged X-mount post-hooks) that the trivy gate
+# rejects. Pull the patched 2.42.3-r0 from Alpine's repo. This is a bridge:
+# once a rebuilt nginx-unprivileged alpine tag ships libuuid >= 2.42.3-r0 this
+# line upgrades nothing and exits 0, and should be replaced by a plain
+# base-digest bump.
+RUN apk add --no-cache --upgrade libuuid
+
 # Upstream the /api/ location proxies to; overridden per environment by Helm.
 ENV API_UPSTREAM=http://day2-api:8000
 
