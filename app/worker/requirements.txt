@@ -1,5 +1,6 @@
 # Runtime deps, exact pins per CLAUDE.md rule 2 (no floating versions).
-sqlalchemy==2.1.1
+# 2.1 dropped the implicit greenlet dep; the asyncio extra pulls it back in.
+sqlalchemy[asyncio]==2.1.1
 asyncpg==0.31.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
