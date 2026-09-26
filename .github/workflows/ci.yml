@@ -60,7 +60,7 @@ jobs:
     services:
       postgres:
         # Disposable Postgres, same major version the chart deploys.
-        image: postgres@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+        image: postgres@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
         env:
           POSTGRES_USER: day2
           POSTGRES_PASSWORD: day2
