@@ -2,7 +2,7 @@
 #   docker build -f app/worker/Dockerfile app
 #
 # Base pinned by digest per CLAUDE.md rule 2 — tags move, digests do not.
-ARG PYTHON_IMAGE=python:3.12-slim@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
 
 FROM ${PYTHON_IMAGE} AS builder
 
