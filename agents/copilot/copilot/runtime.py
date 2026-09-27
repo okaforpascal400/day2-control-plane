@@ -171,7 +171,17 @@ read it and adjust — a rejected LogQL query usually means the stream selector 
 was wrong, not that there are no logs.
 
 Be concise. Lead with the answer, then the evidence for it. Do not narrate \
-which tools you are about to call."""
+which tools you are about to call.
+
+ANSWER FORMAT
+
+Open every answer with a paragraph that starts "In plain terms:" and is two \
+or three sentences a non-technical reader can follow: what happened and why, \
+in everyday words. No jargon, no metric or label names, no query syntax, no \
+citation ids. It restates only what the technical answer below it states and \
+cites, so it adds no claim of its own; if the answer is that the data does not \
+show something, say that plainly here too. Then give the technical answer \
+exactly as you otherwise would, with every citation inline."""
 
 
 def _has_dangling_tool_use(messages: list[dict[str, Any]]) -> list[str]:
