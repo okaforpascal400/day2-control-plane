@@ -206,7 +206,11 @@ promtail:
   fullnameOverride: promtail
   resources:
     requests: { cpu: 20m, memory: 48Mi }
-    limits: { memory: 96Mi }
+    # 96Mi pinned promtail at its limit for ~18h on Kind: constant cgroup reclaim
+    # burned >1 core in kernel time, starved the node (probe timeouts, restarts)
+    # and every push to Loki timed out. Only the limit moves, so the request
+    # tally below and the t3.small/t3.medium sizing are unchanged.
+    limits: { memory: 192Mi }
   config:
     clients:
       - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
