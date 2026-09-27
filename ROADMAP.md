@@ -133,6 +133,16 @@
       timeline. Evidence gathering is scripted rather than model-driven, so
       coverage is a property of the code and cost is fixed at one model call.
       Verified against the real load window: **$0.0835**, 7 cited entries.
+- [x] **Web UI to demo-recording standard** (polish, no behaviour change) — one
+      theme applied throughout: prose is sans, anything the system measured or
+      signed is mono, and each evidence source owns a hue used identically on
+      the inline chip, the sidebar card and the timeline node. Markdown is
+      rendered, citations are clickable both ways, the supported/unsupported
+      verdict is a badge per answer, and a turn in flight has its own state.
+      Still one HTML file, still zero runtime dependencies. Screenshots of every
+      view live in `docs/screenshots/`, regenerated from the committed receipts
+      by `agents/copilot/tools/screenshots.mjs` — reviewing the UI costs no API
+      call.
 
 **Live run, one chained session:** 5 answers, `PASS (attested)`, chain of 5
 intact, **$1.9123** of a $2.00 cap. Two supported with 9 and 5 citations; two
