@@ -3,303 +3,1009 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Observability Copilot</title>
 <style>
+/* ===========================================================================
+   Observability Copilot — one theme, applied everywhere.
+
+   The theme has one idea: prose is human, monospace is machine. Anything the
+   model wrote is set in the sans face; anything the system measured, signed or
+   fetched — costs, elapsed times, queries, citation ids, key fingerprints — is
+   set in mono. A reader can tell which is which without reading a word.
+
+   Colour carries one more distinction: each evidence source owns a hue, and
+   that hue is the same dot on an inline citation chip, on its evidence card
+   and on its timeline node. Everything else is greyscale plus a single accent,
+   so the coloured dots are the only thing competing for attention.
+   ========================================================================= */
 :root{
-  --bg:#0f1115; --panel:#161920; --panel-2:#1c2029; --line:#252a35;
-  --text:#e6e9ef; --muted:#8b93a3; --faint:#5a6172;
-  --accent:#6aa3ff; --good:#4ec9a0; --warn:#e0a355; --bad:#e0645f;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  /* surfaces, darkest to lightest */
+  --bg:#0a0c11;
+  --s1:#11141b;      /* header, composer, rail */
+  --s2:#161a23;      /* cards */
+  --s3:#1d222d;      /* inputs, hover */
+  --line:#232936;
+  --line-hi:#333c4d;
+
+  /* text */
+  --fg:#e9edf5;
+  --fg2:#98a2b6;
+  --fg3:#616b7e;
+  --fg-hi:#ffffff;   /* emphasis inside prose */
+  --code-ink:#cfe0ff;
+
+  /* semantics */
+  --accent:#5b9dff;
+  --accent-ink:#07101f;
+  --accent-wash:rgba(91,157,255,.12);
+  --accent-glow:rgba(91,157,255,.24);
+  --ok:#3ecf8e;   --ok-wash:rgba(62,207,142,.10);  --ok-line:#1f5741;
+  --warn:#f0b357; --warn-wash:rgba(240,179,87,.10); --warn-line:#5d4622;
+  --bad:#f2685f;  --bad-wash:rgba(242,104,95,.10);  --bad-line:#5e2b28;
+  --warn-ink:#f5cf95; --bad-ink:#ffb6b0;   /* readable body text on the washes */
+
+  /* evidence sources: metrics=orange, logs=violet, code=blue family */
+  --src-prometheus:#e8833a;
+  --src-loki:#c084f0;
+  --src-git:#4fb6d9;
+  --src-repo:#5b9dff;
+  --src-unknown:#7d879b;
+
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+
+  --r:10px;      /* card radius */
+  --r-sm:7px;
+  --r-pill:999px;
 }
+
 *{box-sizing:border-box}
-body{margin:0;height:100vh;display:flex;flex-direction:column;
-  background:var(--bg);color:var(--text);font:14px/1.55 var(--sans)}
+html,body{height:100%;overflow:hidden}
+body{
+  margin:0;display:flex;flex-direction:column;
+  background:var(--bg);color:var(--fg);
+  font:15px/1.6 var(--sans);
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit}
+::selection{background:var(--accent-wash);color:var(--fg)}
 
-header{display:flex;align-items:center;gap:16px;padding:12px 20px;
-  border-bottom:1px solid var(--line);background:var(--panel)}
-header h1{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em}
-header .dot{width:7px;height:7px;border-radius:50%;background:var(--good);
-  box-shadow:0 0 8px var(--good)}
-.tabs{display:flex;gap:2px;margin-left:8px}
-.tab{padding:5px 13px;border-radius:6px;cursor:pointer;color:var(--muted);
-  font-size:13px;font-weight:500;border:1px solid transparent}
-.tab:hover{color:var(--text)}
-.tab.on{background:var(--panel-2);color:var(--text);border-color:var(--line)}
-.spacer{flex:1}
-.budget{display:flex;align-items:center;gap:9px;font:12px var(--mono);color:var(--muted)}
-.bar{width:90px;height:5px;border-radius:3px;background:var(--panel-2);overflow:hidden}
-.bar i{display:block;height:100%;background:var(--accent);transition:width .4s ease}
-.bar.hot i{background:var(--warn)} .bar.over i{background:var(--bad)}
+/* scrollbars, themed so the rail and the log match the panels */
+.scroll{scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+.scroll::-webkit-scrollbar{width:10px;height:10px}
+.scroll::-webkit-scrollbar-track{background:transparent}
+.scroll::-webkit-scrollbar-thumb{background:var(--line);border-radius:var(--r-pill);
+  border:3px solid transparent;background-clip:content-box}
+.scroll:hover::-webkit-scrollbar-thumb{background:var(--line-hi);background-clip:content-box}
 
-main{flex:1;display:grid;grid-template-columns:1fr 400px;min-height:0}
-#left{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line)}
-#log{flex:1;overflow-y:auto;padding:22px 26px;scroll-behavior:smooth}
-#log::-webkit-scrollbar,#side::-webkit-scrollbar{width:9px}
-#log::-webkit-scrollbar-thumb,#side::-webkit-scrollbar-thumb{
-  background:var(--panel-2);border-radius:5px}
-
-.msg{margin-bottom:26px;max-width:760px}
-.msg.q .who{color:var(--accent)}
-.who{font:11px var(--mono);text-transform:uppercase;letter-spacing:.09em;
-  color:var(--faint);margin-bottom:7px}
-.bubble{white-space:pre-wrap;word-wrap:break-word}
-.msg.q .bubble{color:var(--text);font-weight:500}
-.meta{margin-top:11px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-  font:11px var(--mono);color:var(--faint)}
-.badge{padding:2px 8px;border-radius:11px;font:11px var(--mono);border:1px solid}
-.badge.ok{color:var(--good);border-color:#25503f;background:#12241d}
-.badge.no{color:var(--bad);border-color:#57292a;background:#241416}
-.reason{color:var(--bad);font-size:12px;margin-top:7px;line-height:1.5}
-.cite{color:var(--accent);cursor:pointer;border-bottom:1px dotted currentColor;
-  font:12px var(--mono)}
-.cite:hover{background:#1b2740}
-button.link{background:none;border:none;color:var(--faint);cursor:pointer;
-  font:11px var(--mono);padding:0;text-decoration:underline}
-button.link:hover{color:var(--accent)}
-
-form{display:flex;gap:10px;padding:16px 26px;border-top:1px solid var(--line);
-  background:var(--panel)}
-input[type=text]{flex:1;background:var(--bg);border:1px solid var(--line);
-  color:var(--text);padding:11px 14px;border-radius:8px;font:14px var(--sans);outline:none}
-input[type=text]:focus{border-color:var(--accent)}
-button.go{background:var(--accent);border:none;color:#0b1220;font-weight:600;
-  padding:0 20px;border-radius:8px;cursor:pointer;font-size:13px}
-button.go:disabled{opacity:.45;cursor:default}
-
-#side{background:var(--panel);overflow-y:auto;padding:18px}
-#side h2{margin:0 0 4px;font:11px var(--mono);text-transform:uppercase;
-  letter-spacing:.09em;color:var(--faint);font-weight:500}
-.hint{color:var(--faint);font-size:12px;margin-bottom:14px}
-.ev{border:1px solid var(--line);border-radius:9px;padding:11px 12px;
-  margin-bottom:9px;background:var(--panel-2);transition:border-color .25s,box-shadow .25s}
-.ev.hit{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-.ev.err{border-color:#57292a}
-.ev .tool{font:12px var(--mono);color:var(--text);font-weight:600}
-.ev .cid{font:10px var(--mono);color:var(--accent);float:right}
-.ev pre{margin:7px 0 0;font:11px/1.5 var(--mono);color:var(--muted);
-  white-space:pre-wrap;word-break:break-all}
-.ev .tags{margin-top:7px;display:flex;gap:5px;flex-wrap:wrap}
-.tag{font:10px var(--mono);padding:1px 6px;border-radius:9px;
-  background:#1a1e27;color:var(--faint);border:1px solid var(--line)}
-.tag.w{color:var(--warn);border-color:#4a3a22}
-.tag.e{color:var(--bad);border-color:#57292a}
-
-.tl{border-left:2px solid var(--line);margin:14px 0 0 8px;padding-left:0}
-.tl .item{position:relative;padding:0 0 20px 22px}
-.tl .item::before{content:"";position:absolute;left:-7px;top:5px;width:11px;height:11px;
-  border-radius:50%;background:var(--panel);border:2px solid var(--accent)}
-.tl .item.logs::before{border-color:var(--muted)}
-.tl .item.alerts::before{border-color:var(--warn)}
-.tl .item.deploy::before{border-color:var(--good)}
-.tl .t{font:11px var(--mono);color:var(--faint)}
-.tl .h{font-weight:600;margin:2px 0 3px}
-.tl .d{color:var(--muted);font-size:13px}
-.rowin{display:flex;gap:9px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
-.rowin input{background:var(--bg);border:1px solid var(--line);color:var(--text);
-  padding:8px 11px;border-radius:7px;font:12px var(--mono);outline:none}
-.rowin input:focus{border-color:var(--accent)}
-.empty{color:var(--faint);padding:34px 0;text-align:center;font-size:13px}
-.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--line);
-  border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
-@keyframes sp{to{transform:rotate(360deg)}}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.grow{flex:1}
 .hidden{display:none!important}
+
+/* ===== header =========================================================== */
+header{
+  display:flex;align-items:center;gap:20px;height:64px;flex:0 0 64px;
+  padding:0 20px 0 18px;background:var(--s1);
+  border-bottom:1px solid var(--line);position:relative;z-index:5;
+}
+.brand{display:flex;align-items:center;gap:11px;min-width:0}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:0 0 auto;
+  box-shadow:0 0 0 0 var(--ok-wash);animation:pulse 2.6s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(62,207,142,.45)}70%,100%{box-shadow:0 0 0 9px rgba(62,207,142,0)}}
+.brand h1{margin:0;font-size:14px;font-weight:600;letter-spacing:-.005em;white-space:nowrap}
+.brand p{margin:1px 0 0;font:10px/1.3 var(--mono);color:var(--fg3);
+  letter-spacing:.04em;white-space:nowrap}
+
+.tabs{display:flex;gap:3px;padding:3px;background:var(--bg);
+  border:1px solid var(--line);border-radius:9px}
+.tab{padding:5px 15px;border-radius:6px;border:0;background:none;cursor:pointer;
+  color:var(--fg2);font-size:13px;font-weight:500;transition:color .15s,background .15s}
+.tab:hover{color:var(--fg)}
+.tab.on{background:var(--s3);color:var(--fg);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+
+/* header stat rail: a label above a machine value, repeated three times */
+.stats{display:flex;align-items:stretch;gap:0}
+.stat{display:flex;flex-direction:column;justify-content:center;gap:4px;padding:0 18px}
+.stat-k{font:9px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--fg3)}
+.stat-v{font:12px/1 var(--mono);color:var(--fg);font-variant-numeric:tabular-nums;
+  display:flex;align-items:center;gap:7px}
+.stat-v .dim{color:var(--fg3)}
+.vr{width:1px;background:var(--line);margin:14px 0}
+
+.meter{width:104px;height:6px;border-radius:var(--r-pill);background:var(--bg);
+  border:1px solid var(--line);overflow:hidden;position:relative}
+.meter i{display:block;height:100%;width:0;border-radius:var(--r-pill);
+  background:var(--accent);transition:width .45s cubic-bezier(.2,.8,.2,1),background .3s}
+.meter.warn i{background:var(--warn)}
+.meter.over i{background:var(--bad)}
+.meter::after{content:"";position:absolute;top:0;bottom:0;left:75%;width:1px;
+  background:var(--line-hi)}
+
+/* indeterminate progress, shown only while a turn is in flight */
+.wire{position:absolute;left:0;right:0;bottom:-1px;height:1px;overflow:hidden}
+.wire::after{content:"";position:absolute;inset:0;width:34%;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  animation:wire 1.25s ease-in-out infinite}
+@keyframes wire{0%{transform:translateX(-120%)}100%{transform:translateX(420%)}}
+
+/* ===== layout =========================================================== */
+/* Both tracks must be allowed to shrink below their content, or #log and
+   #evbox never become the scrollers and the whole page overflows instead. */
+main{flex:1;display:grid;min-height:0;
+  grid-template-columns:minmax(0,1fr) 428px;grid-template-rows:minmax(0,1fr)}
+#pane{display:flex;flex-direction:column;min-width:0;min-height:0;
+  border-right:1px solid var(--line)}
+#log{flex:1;overflow-y:auto;padding:30px 40px 40px}
+#log.centre{display:flex;align-items:center}
+#log.centre .col{width:100%}
+.col{max-width:860px;margin:0 auto}
+
+/* ===== chat turns ======================================================= */
+.turn{margin-bottom:38px}
+.turn:last-child{margin-bottom:8px}
+
+.ask{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;
+  background:var(--s2);border:1px solid var(--line);border-left:2px solid var(--accent);
+  border-radius:var(--r-sm);margin-bottom:22px}
+.ask .k{font:9px/1.9 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+  color:var(--fg3);flex:0 0 auto}
+.ask .t{font-size:15px;font-weight:500;color:var(--fg);margin:0}
+
+.reply-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.reply-head .who{font:9px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+  color:var(--fg3)}
+.reply-head .rule{flex:1;height:1px;background:var(--line)}
+.reply-head .model{font:10px/1 var(--mono);color:var(--fg3)}
+
+/* --- rendered markdown ------------------------------------------------- */
+.prose{max-width:72ch;font-size:15px;line-height:1.68;color:var(--fg)}
+.prose>*:first-child{margin-top:0}
+.prose>*:last-child{margin-bottom:0}
+.prose p{margin:0 0 15px}
+.prose h2{font-size:12px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--fg2);margin:26px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+.prose h3{font-size:15px;font-weight:600;color:var(--fg);margin:22px 0 9px}
+.prose h4{font-size:13px;font-weight:600;color:var(--fg2);margin:18px 0 7px}
+.prose strong{font-weight:640;color:var(--fg-hi)}
+.prose em{color:var(--fg2);font-style:italic}
+.prose ul,.prose ol{margin:0 0 15px;padding-left:20px}
+.prose li{margin:0 0 7px}
+.prose li::marker{color:var(--fg3)}
+.prose ul{list-style:none;padding-left:16px}
+.prose ul>li{position:relative}
+.prose ul>li::before{content:"";position:absolute;left:-14px;top:.66em;width:4px;height:4px;
+  border-radius:50%;background:var(--line-hi)}
+.prose code{font:.855em var(--mono);background:var(--s3);border:1px solid var(--line);
+  color:var(--code-ink);padding:1px 5px;border-radius:5px;word-break:break-word}
+.prose pre.code{margin:0 0 15px;padding:12px 14px;background:var(--s2);
+  border:1px solid var(--line);border-radius:var(--r-sm);overflow-x:auto}
+.prose pre.code code{background:none;border:0;padding:0;color:var(--fg2);
+  font-size:12.5px;line-height:1.6;white-space:pre}
+.prose blockquote{margin:0 0 15px;padding:2px 0 2px 14px;border-left:2px solid var(--line-hi);
+  color:var(--fg2)}
+.prose hr{border:0;border-top:1px solid var(--line);margin:22px 0}
+.prose a.ext{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+
+/* --- citation chips ----------------------------------------------------- */
+.cite{display:inline-flex;align-items:center;gap:5px;vertical-align:baseline;
+  padding:1px 7px 1px 6px;margin:0 1px;border-radius:var(--r-pill);
+  background:var(--s3);border:1px solid var(--line);cursor:pointer;
+  font:11px/1.5 var(--mono);color:var(--fg2);letter-spacing:0;
+  transition:background .15s,border-color .15s,color .15s}
+.cite:hover{background:var(--s1);border-color:var(--line-hi);color:var(--fg)}
+.cite .dot{width:5px;height:5px;border-radius:50%;background:var(--src-unknown);flex:0 0 auto}
+.cite .num{color:var(--fg3)}
+.cite:hover .num{color:var(--fg2)}
+.cite.on{background:var(--accent-wash);border-color:var(--accent);color:var(--fg)}
+.cite.on .num{color:var(--accent)}
+.dot.s-prometheus{background:var(--src-prometheus)}
+.dot.s-loki{background:var(--src-loki)}
+.dot.s-git{background:var(--src-git)}
+.dot.s-repo{background:var(--src-repo)}
+
+/* --- verdict footer ----------------------------------------------------- */
+.verdict{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px;
+  padding-top:14px;border-top:1px solid var(--line)}
+.badge{display:inline-flex;align-items:center;gap:7px;padding:4px 11px 4px 9px;
+  border-radius:var(--r-pill);border:1px solid;font:11px/1.5 var(--mono);
+  letter-spacing:.03em;white-space:nowrap}
+.badge .g{font-size:10px;line-height:1}
+.badge b{font-weight:600}
+.badge.ok{color:var(--ok);border-color:var(--ok-line);background:var(--ok-wash)}
+.badge.no{color:var(--bad);border-color:var(--bad-line);background:var(--bad-wash)}
+.badge.neutral{color:var(--fg2);border-color:var(--line);background:var(--s2)}
+.facts{display:flex;align-items:center;gap:0;font:11px/1 var(--mono);color:var(--fg3)}
+.facts span{padding:0 10px;border-left:1px solid var(--line)}
+.facts span:first-child{border-left:0;padding-left:2px}
+.facts b{color:var(--fg2);font-weight:500}
+
+.ghost{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:var(--r-sm);
+  background:var(--s2);border:1px solid var(--line);color:var(--fg2);cursor:pointer;
+  font:11px/1.5 var(--mono);transition:background .15s,color .15s,border-color .15s}
+.ghost:hover{background:var(--s3);color:var(--fg);border-color:var(--line-hi)}
+
+.reason{margin-top:12px;padding:11px 13px;border-radius:var(--r-sm);
+  background:var(--bad-wash);border:1px solid var(--bad-line);
+  color:var(--bad-ink);font-size:13.5px;line-height:1.55;max-width:72ch}
+.reason .k{display:block;font:9px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+  color:var(--bad);margin-bottom:6px}
+
+/* ===== in-progress ====================================================== */
+.working{border:1px solid var(--line);border-radius:var(--r);background:var(--s2);
+  padding:16px 18px;max-width:72ch;position:relative;overflow:hidden}
+.working::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(105deg,transparent 35%,rgba(91,157,255,.055) 50%,transparent 65%);
+  background-size:260% 100%;animation:sheen 2.1s linear infinite}
+@keyframes sheen{0%{background-position:160% 0}100%{background-position:-60% 0}}
+.working .top{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.orbit{width:13px;height:13px;border-radius:50%;flex:0 0 auto;
+  border:2px solid var(--line-hi);border-top-color:var(--accent);animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.working .lbl{font:11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
+.working .t{font-size:14px;color:var(--fg2);margin:0 0 4px;line-height:1.55}
+.working .foot{display:flex;align-items:center;gap:0;margin-top:12px;padding-top:11px;
+  border-top:1px solid var(--line);font:11px/1 var(--mono);color:var(--fg3)}
+.working .foot span{padding:0 10px;border-left:1px solid var(--line)}
+.working .foot span:first-child{border-left:0;padding-left:0}
+.working .foot .el{color:var(--accent)}
+
+.skel{border:1px solid var(--line);border-radius:var(--r);background:var(--s2);
+  padding:13px 14px;margin-bottom:10px;overflow:hidden;position:relative}
+.skel i{display:block;height:8px;border-radius:4px;background:var(--s3);margin-bottom:9px}
+.skel i:last-child{margin-bottom:0}
+.skel::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(105deg,transparent 35%,rgba(255,255,255,.035) 50%,transparent 65%);
+  background-size:260% 100%;animation:sheen 2.1s linear infinite}
+
+/* ===== composer ========================================================= */
+form{flex:0 0 auto;padding:14px 40px 16px;border-top:1px solid var(--line);background:var(--s1)}
+.composer{max-width:860px;margin:0 auto;display:flex;gap:10px;align-items:center}
+.field{flex:1;display:flex;align-items:center;gap:10px;background:var(--bg);
+  border:1px solid var(--line);border-radius:9px;padding:0 14px;height:44px;
+  transition:border-color .15s,box-shadow .15s}
+.field:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
+.field .caret{color:var(--fg3);font:13px var(--mono);flex:0 0 auto}
+.field input{flex:1;min-width:0;background:none;border:0;outline:none;color:var(--fg);
+  font:14.5px var(--sans);height:100%}
+.field input::placeholder{color:var(--fg3)}
+.field input:disabled{color:var(--fg3)}
+
+.go{height:44px;padding:0 22px;border:0;border-radius:9px;cursor:pointer;
+  background:var(--accent);color:var(--accent-ink);font-size:13.5px;font-weight:600;
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:96px;
+  transition:filter .15s,opacity .15s}
+.go:hover:not(:disabled){filter:brightness(1.1)}
+.go:disabled{opacity:.5;cursor:default}
+.go .orbit{border-color:rgba(7,16,31,.3);border-top-color:var(--accent-ink);width:13px;height:13px}
+.hintbar{max-width:860px;margin:9px auto 0;display:flex;align-items:center;gap:0;
+  font:10px/1 var(--mono);color:var(--fg3)}
+.hintbar span{padding:0 9px;border-left:1px solid var(--line)}
+.hintbar span:first-child{border-left:0;padding-left:0}
+kbd{font:10px var(--mono);background:var(--s3);border:1px solid var(--line);
+  border-bottom-width:2px;border-radius:4px;padding:1px 4px;color:var(--fg2)}
+
+/* replay composer */
+.window{flex:1;display:flex;align-items:center;gap:10px;background:var(--bg);
+  border:1px solid var(--line);border-radius:9px;padding:0 12px;height:44px;
+  transition:border-color .15s,box-shadow .15s}
+.window:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
+.window .k{font:9px var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--fg3)}
+.window input{background:none;border:0;outline:none;color:var(--fg);
+  font:12.5px var(--mono);width:204px}
+.window .arrow{color:var(--fg3)}
+.presets{display:flex;gap:4px;margin-left:auto}
+.preset{padding:3px 9px;border-radius:var(--r-pill);background:var(--s2);
+  border:1px solid var(--line);color:var(--fg3);cursor:pointer;font:10px var(--mono)}
+.preset:hover{color:var(--fg);border-color:var(--line-hi);background:var(--s3)}
+
+/* ===== evidence rail ==================================================== */
+#rail{background:var(--s1);display:flex;flex-direction:column;min-height:0}
+.rail-head{flex:0 0 auto;padding:16px 18px 13px;border-bottom:1px solid var(--line)}
+.rail-head .row{display:flex;align-items:baseline;gap:9px}
+.rail-head h2{margin:0;font:10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--fg2);font-weight:500}
+.count{font:10px/1 var(--mono);color:var(--fg3);padding:3px 7px;border-radius:var(--r-pill);
+  background:var(--s3);border:1px solid var(--line)}
+.rail-head p{margin:7px 0 0;font-size:12px;line-height:1.5;color:var(--fg3)}
+#evbox{flex:1;overflow-y:auto;padding:14px 16px 24px}
+
+.ev{border:1px solid var(--line);border-radius:var(--r);background:var(--s2);
+  padding:0;margin-bottom:10px;cursor:pointer;overflow:hidden;
+  transition:border-color .2s,box-shadow .2s,background .2s}
+.ev:hover{border-color:var(--line-hi)}
+.ev.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 6px 20px rgba(0,0,0,.35)}
+.ev.err{border-color:var(--bad-line)}
+.ev .bar{height:2px;background:var(--src-unknown);opacity:.85}
+.ev .bar.s-prometheus{background:var(--src-prometheus)}
+.ev .bar.s-loki{background:var(--src-loki)}
+.ev .bar.s-git{background:var(--src-git)}
+.ev .bar.s-repo{background:var(--src-repo)}
+.ev .body{padding:11px 13px 12px}
+.ev .top{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.ev .tool{font:12px var(--mono);color:var(--fg);font-weight:500;letter-spacing:-.01em}
+.ev .cid{font:10px var(--mono);color:var(--fg3);padding:2px 6px;border-radius:var(--r-pill);
+  background:var(--s3);border:1px solid var(--line);white-space:nowrap}
+.ev.on .cid{color:var(--accent);border-color:var(--accent)}
+.ev .q{margin:0;font:11px/1.55 var(--mono);color:var(--fg2);white-space:pre-wrap;
+  word-break:break-word;background:var(--bg);border:1px solid var(--line);
+  border-radius:var(--r-sm);padding:8px 10px;max-height:104px;overflow:hidden}
+.ev .q.bad{color:var(--bad-ink);border-color:var(--bad-line);background:var(--bad-wash)}
+.ev .sub{margin-top:8px;font:10px/1.5 var(--mono);color:var(--fg3);word-break:break-word}
+.ev .chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:9px}
+.chip{display:inline-flex;align-items:center;gap:4px;font:10px/1.5 var(--mono);
+  padding:2px 7px;border-radius:var(--r-pill);background:var(--s3);
+  border:1px solid var(--line);color:var(--fg3)}
+.chip.t{color:var(--fg2)}
+.chip.w{color:var(--warn);border-color:var(--warn-line);background:var(--warn-wash)}
+.chip.e{color:var(--bad);border-color:var(--bad-line);background:var(--bad-wash)}
+
+/* rail empty state doubles as the least-privilege disclosure */
+.blank{padding:8px 2px}
+.blank .lede{font-size:13px;line-height:1.6;color:var(--fg3);margin:0 0 20px}
+.blank h3{font:9px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--fg3);margin:0 0 10px;font-weight:500}
+.toollist{display:flex;flex-direction:column;gap:1px;margin:0 0 20px;
+  border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;background:var(--line)}
+.toollist div{display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--s2);
+  font:11px var(--mono);color:var(--fg2)}
+.toollist .ro{margin-left:auto;font-size:9px;letter-spacing:.06em;color:var(--fg3);
+  text-transform:uppercase}
+.scopelist{display:flex;flex-wrap:wrap;gap:5px}
+
+/* ===== replay =========================================================== */
+.rp-head{display:flex;align-items:center;gap:14px;padding:13px 16px;margin-bottom:24px;
+  background:var(--s2);border:1px solid var(--line);border-left:2px solid var(--accent);
+  border-radius:var(--r-sm)}
+.rp-head .k{font:9px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--fg3)}
+.rp-head .w{font:13px var(--mono);color:var(--fg);margin-top:5px;display:flex;align-items:center;gap:9px}
+.rp-head .w .arrow{color:var(--fg3)}
+.rp-head .dur{margin-left:auto;text-align:right}
+.rp-head .dur .v{font:13px var(--mono);color:var(--fg);margin-top:5px}
+
+.section{font:9px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--fg3);
+  margin:28px 0 13px;display:flex;align-items:center;gap:10px}
+.section::after{content:"";flex:1;height:1px;background:var(--line)}
+.section:first-child{margin-top:0}
+
+.tl{position:relative;margin:0;padding:0 0 0 24px;list-style:none}
+.tl::before{content:"";position:absolute;left:5px;top:6px;bottom:10px;width:1px;background:var(--line)}
+.tl li{position:relative;padding:0 0 20px}
+.tl li:last-child{padding-bottom:0}
+.tl .node{position:absolute;left:-24px;top:4px;width:11px;height:11px;border-radius:50%;
+  background:var(--bg);border:2px solid var(--src-unknown)}
+.tl .node.s-prometheus{border-color:var(--src-prometheus)}
+.tl .node.s-loki{border-color:var(--src-loki)}
+.tl .node.s-git{border-color:var(--src-git)}
+.tl .node.s-repo{border-color:var(--src-repo)}
+.tl .when{font:11px/1 var(--mono);color:var(--fg3);display:flex;align-items:center;gap:9px}
+.tl .kind{font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 6px;
+  border-radius:var(--r-pill);border:1px solid var(--line);background:var(--s2);color:var(--fg3)}
+.tl h4{margin:7px 0 4px;font-size:14.5px;font-weight:600;color:var(--fg);line-height:1.45}
+.tl p{margin:0 0 8px;font-size:13.5px;line-height:1.6;color:var(--fg2);max-width:66ch}
+.tl li.on .node{box-shadow:0 0 0 5px var(--accent-glow)}
+
+.conclusion{padding:15px 17px;background:var(--s2);border:1px solid var(--line);
+  border-radius:var(--r);max-width:72ch}
+.conclusion .k{font:9px/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+  color:var(--fg3);display:block;margin-bottom:9px}
+.conclusion p{margin:0;font-size:14.5px;line-height:1.65}
+
+.note{margin-top:14px;padding:10px 13px;border-radius:var(--r-sm);background:var(--warn-wash);
+  border:1px solid var(--warn-line);color:var(--warn-ink);font-size:12.5px;line-height:1.55;max-width:72ch}
+
+/* ===== empty states ===================================================== */
+.zero{max-width:640px;margin:0 auto;text-align:left}
+.zero .mark{display:inline-flex;align-items:center;gap:8px;padding:4px 11px;
+  border-radius:var(--r-pill);background:var(--s2);border:1px solid var(--line);
+  font:10px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--fg3);
+  margin-bottom:18px}
+.zero h2{margin:0 0 12px;font-size:23px;font-weight:600;letter-spacing:-.018em;line-height:1.25}
+.zero p{margin:0 0 22px;font-size:14.5px;line-height:1.65;color:var(--fg2);max-width:56ch}
+.samples{display:flex;flex-direction:column;gap:7px}
+.sample{display:flex;align-items:center;gap:11px;text-align:left;width:100%;
+  padding:11px 14px;border-radius:var(--r-sm);background:var(--s2);border:1px solid var(--line);
+  color:var(--fg2);cursor:pointer;font-size:13.5px;line-height:1.45;
+  transition:background .15s,border-color .15s,color .15s}
+.sample:hover{background:var(--s3);border-color:var(--line-hi);color:var(--fg)}
+.sample .ar{color:var(--fg3);font:12px var(--mono);flex:0 0 auto}
+.sample:hover .ar{color:var(--accent)}
+.rail-zero{padding:40px 6px;text-align:center;color:var(--fg3);font-size:12.5px;line-height:1.6}
 </style></head><body>
 
 <header>
-  <span class="dot"></span>
-  <h1>Observability Copilot</h1>
-  <div class="tabs">
-    <div class="tab on" data-tab="chat">Chat</div>
-    <div class="tab" data-tab="replay">Replay</div>
+  <div class="brand">
+    <span class="pulse"></span>
+    <div>
+      <h1>Observability Copilot</h1>
+      <p>read-only tools · cited answers · signed receipts</p>
+    </div>
   </div>
-  <div class="spacer"></div>
-  <div class="budget">
-    <span id="spend">$0.0000</span>
-    <div class="bar" id="bar"><i style="width:0%"></i></div>
-    <span id="cap">/ $0.50</span>
+
+  <nav class="tabs">
+    <button class="tab on" data-tab="chat">Chat</button>
+    <button class="tab" data-tab="replay">Replay</button>
+  </nav>
+
+  <div class="grow"></div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-k">Budget</div>
+      <div class="stat-v">
+        <div class="meter" id="meter"><i></i></div>
+        <span id="spend">$0.0000</span><span class="dim" id="cap">/ $0.50</span>
+      </div>
+    </div>
+    <div class="vr"></div>
+    <div class="stat">
+      <div class="stat-k">Signing key</div>
+      <div class="stat-v" id="fpr" title="Ed25519 public key fingerprint">—</div>
+    </div>
+    <div class="vr"></div>
+    <div class="stat">
+      <div class="stat-k">Session</div>
+      <div class="stat-v" id="sid" title="receipt chain session id">—</div>
+    </div>
   </div>
+
+  <div class="wire hidden" id="wire"></div>
 </header>
 
 <main>
-  <div id="left">
-    <div id="log">
-      <div class="empty" id="blank">
-        Ask about the running system — metrics, logs, alerts, dashboards, or why
-        a line of code is the way it is.<br><br>
-        Every answer cites the tool calls behind it.
-      </div>
-    </div>
-    <form id="ask">
-      <input type="text" id="q" placeholder="why did latency spike at 19:40?" autocomplete="off">
-      <button class="go" id="send">Ask</button>
+  <div id="pane">
+    <div id="log" class="scroll"><div class="col" id="col"></div></div>
+
+    <form id="composer" autocomplete="off">
+      <div class="composer" id="fields"></div>
+      <div class="hintbar" id="hints"></div>
     </form>
   </div>
 
-  <div id="side">
-    <h2>Evidence</h2>
-    <div class="hint" id="sidehint">The tool calls behind the latest answer.</div>
-    <div id="ev"></div>
-  </div>
+  <aside id="rail">
+    <div class="rail-head">
+      <div class="row">
+        <h2>Evidence</h2>
+        <span class="count" id="evcount">0</span>
+        <div class="grow"></div>
+        <span class="count" id="evwho">idle</span>
+      </div>
+      <p id="railsub">Every tool call behind the answer, in the order it was made.</p>
+    </div>
+    <div id="evbox" class="scroll"></div>
+  </aside>
 </main>
 
 <script>
-const $=s=>document.querySelector(s), el=(t,c)=>{const e=document.createElement(t);if(c)e.className=c;return e};
-let TAB="chat";
+"use strict";
+const $ = s => document.querySelector(s);
+const el = (t, c) => { const n = document.createElement(t); if (c) n.className = c; return n; };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-function esc(s){return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
+/* Sources that own a hue. Anything else falls back to the neutral dot, so a
+   new tool namespace degrades quietly instead of rendering an unstyled chip. */
+const SOURCES = ["prometheus", "loki", "git", "repo"];
+const srcClass = s => "s-" + (SOURCES.includes(s) ? s : "unknown");
 
-function budget(s){
-  if(!s)return;
-  $("#spend").textContent="$"+s.total_usd.toFixed(4);
-  $("#cap").textContent="/ $"+s.budget_usd.toFixed(2);
-  const p=Math.min(100,100*s.total_usd/s.budget_usd), bar=$("#bar");
-  bar.querySelector("i").style.width=p+"%";
-  bar.className="bar"+(p>=100?" over":p>75?" hot":"");
+let TAB = "chat";
+let BUSY = false;
+let ACTIVE = null;     // citation id currently highlighted on both sides
+let TICKER = null;
+
+/* ========================================================================
+   Markdown. Small on purpose: the model emits headings, bold, bullets,
+   inline code and fenced blocks, and that is the whole grammar supported
+   here. No dependency, no build step — the page is still one file.
+   ===================================================================== */
+function chip(id) {
+  const [src, num] = id.split(":");
+  return `<button type="button" class="cite" data-cite="${esc(id)}" title="jump to evidence ${esc(id)}">` +
+    `<i class="dot ${srcClass(src)}"></i>${esc(src)}<span class="num">${esc(num)}</span></button>`;
 }
 
-// Citations in the answer become clickable and highlight their evidence card.
-function linkCites(t){
-  return esc(t).replace(/\[((?:prometheus|loki|repo|git):\d{8})\]/g,
-    (_,id)=>`<span class="cite" data-cite="${id}">[${id}]</span>`);
+function inline(s) {
+  const code = [];
+  s = String(s).replace(/`([^`]+)`/g, (_, c) => { code.push(c); return "\u0001" + (code.length - 1) + "\u0001"; });
+  s = esc(s);
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,;:!?])/g, "$1<em>$2</em>");
+  s = s.replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,;:!?])/g, "$1<em>$2</em>");
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    (_, t, u) => `<a class="ext" href="${esc(u)}" target="_blank" rel="noopener">${t}</a>`);
+  s = s.replace(/\[([a-z][a-z0-9_-]*:[0-9a-f]{6,12})\]/gi, (_, id) => chip(id));
+  return s.replace(/\u0001(\d+)\u0001/g, (_, i) => `<code>${esc(code[+i])}</code>`);
 }
 
-function renderEvidence(items){
-  const box=$("#ev"); box.innerHTML="";
-  if(!items||!items.length){box.innerHTML='<div class="empty">No tool calls.</div>';return}
-  for(const e of items){
-    const d=el("div","ev"+(e.is_error?" err":"")); d.dataset.cite=e.citation_id||"";
-    let h=`<span class="cid">${e.citation_id||""}</span><span class="tool">${esc(e.tool)}</span>`;
-    h+=`<pre>${esc(JSON.stringify(e.arguments))}</pre>`;
-    if(e.is_error) h+=`<pre style="color:var(--bad)">${esc(e.error)}</pre>`;
-    else if(e.provenance&&e.provenance.query)
-      h+=`<pre>${esc(String(e.provenance.query).slice(0,220))}</pre>`;
-    const tags=[];
-    if(e.elapsed_ms!=null)tags.push(`<span class="tag">${e.elapsed_ms}ms</span>`);
-    if(e.redactions)tags.push(`<span class="tag w">${e.redactions} redacted</span>`);
-    if(e.truncated)tags.push(`<span class="tag w">truncated</span>`);
-    if(e.is_error)tags.push(`<span class="tag e">error</span>`);
-    h+=`<div class="tags">${tags.join("")}</div>`;
-    d.innerHTML=h; box.appendChild(d);
-  }
-}
+function markdown(src) {
+  const fences = [];
+  let text = String(src ?? "").replace(/```[\w-]*\n([\s\S]*?)```/g,
+    (_, body) => { fences.push(body.replace(/\n$/, "")); return "\u0002" + (fences.length - 1) + "\u0002"; });
 
-function addTurn(t){
-  $("#blank")?.remove();
-  const log=$("#log");
-  const q=el("div","msg q"); q.innerHTML=`<div class="who">You</div><div class="bubble">${esc(t.question)}</div>`;
-  log.appendChild(q);
+  let out = "", list = null, para = [];
+  const flush = () => { if (para.length) { out += `<p>${inline(para.join(" "))}</p>`; para = []; } };
+  const close = () => { if (list) { out += `</${list}>`; list = null; } };
+  const open = kind => { if (list !== kind) { close(); out += `<${kind}>`; list = kind; } };
 
-  const a=el("div","msg a");
-  let h=`<div class="who">Copilot</div><div class="bubble">${linkCites(t.answer)}</div>`;
-  h+=`<div class="meta">`;
-  h+=t.supported?`<span class="badge ok">supported · ${t.citations.length} cited</span>`
-                :`<span class="badge no">unsupported</span>`;
-  h+=`<span>$${t.cost_usd.toFixed(4)}</span><span>${t.elapsed_ms}ms</span>`;
-  h+=`<span>${t.evidence.length} tool calls</span>`;
-  h+=`<button class="link" data-dl="${t.sequence}">export receipt</button></div>`;
-  if(!t.supported&&t.unsupported_reason) h+=`<div class="reason">${esc(t.unsupported_reason)}</div>`;
-  a.innerHTML=h; log.appendChild(a);
-  log.scrollTop=log.scrollHeight;
-  renderEvidence(t.evidence); budget(t.session);
-}
-
-async function ask(question){
-  const send=$("#send"); send.disabled=true; send.innerHTML='<span class="spin"></span>';
-  try{
-    const r=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({question})});
-    const t=await r.json();
-    if(t.error){
-      $("#blank")?.remove();
-      const d=el("div","msg a");
-      d.innerHTML=`<div class="who">Copilot</div><div class="reason">${esc(t.error)}</div>`;
-      $("#log").appendChild(d);
-    } else addTurn(t);
-  } finally { send.disabled=false; send.textContent="Ask"; }
-}
-
-function renderReplay(r){
-  const log=$("#log"); log.innerHTML="";
-  if(r.error){log.innerHTML=`<div class="msg a"><div class="reason">${esc(r.error)}</div></div>`;return}
-  const w=r.window, box=el("div","msg a");
-  let h=`<div class="who">Replay · ${esc(w.start)} → ${esc(w.end)}</div>`;
-  h+=`<div class="bubble">${esc(r.summary)}</div>`;
-  if(r.timeline.length){
-    h+=`<div class="tl">`;
-    for(const e of r.timeline){
-      h+=`<div class="item ${esc(e.source)}"><div class="t">${esc(e.timestamp)}</div>`;
-      h+=`<div class="h">${esc(e.headline)}</div><div class="d">${esc(e.detail)}</div>`;
-      h+=`<div class="t"><span class="cite" data-cite="${esc(e.citation_id)}">[${esc(e.citation_id)}]</span></div></div>`;
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    let m;
+    if ((m = line.match(/^\u0002(\d+)\u0002$/))) {
+      flush(); close();
+      out += `<pre class="code"><code>${esc(fences[+m[1]])}</code></pre>`;
+    } else if (!line.trim()) {
+      flush(); close();
+    } else if ((m = line.match(/^(#{1,4})\s+(.*)$/))) {
+      flush(); close();
+      const n = Math.min(Math.max(m[1].length, 2), 4);
+      out += `<h${n}>${inline(m[2])}</h${n}>`;
+    } else if (/^\s*(---|\*\*\*|___)\s*$/.test(line)) {
+      flush(); close(); out += "<hr>";
+    } else if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
+      flush(); open("ul"); out += `<li>${inline(m[1])}</li>`;
+    } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      flush(); open("ol"); out += `<li>${inline(m[1])}</li>`;
+    } else if ((m = line.match(/^\s*>\s?(.*)$/))) {
+      flush(); close(); out += `<blockquote>${inline(m[1])}</blockquote>`;
+    } else if (list) {
+      out = out.replace(/<\/li>$/, " " + inline(line) + "</li>");   // wrapped list item
+    } else {
+      para.push(line);
     }
-    h+=`</div>`;
-  } else h+=`<div class="empty">No timeline entries for this window.</div>`;
-  if(r.conclusion) h+=`<div class="bubble" style="margin-top:14px"><b>Conclusion.</b> ${esc(r.conclusion)}</div>`;
-  if(r.dropped_uncited_entries&&r.dropped_uncited_entries.length)
-    h+=`<div class="reason">${r.dropped_uncited_entries.length} entry(ies) dropped for citing evidence this replay did not produce.</div>`;
-  const t=r.turn;
-  if(t){
-    h+=`<div class="meta">`;
-    h+=t.supported?`<span class="badge ok">supported · ${t.citations.length} cited</span>`
-                  :`<span class="badge no">unsupported</span>`;
-    h+=`<span>$${t.cost_usd.toFixed(4)}</span><span>${t.elapsed_ms}ms</span>`;
-    h+=`<button class="link" data-dl="${t.sequence}">export receipt</button></div>`;
-    if(!t.supported&&t.unsupported_reason)h+=`<div class="reason">${esc(t.unsupported_reason)}</div>`;
   }
-  box.innerHTML=h; log.appendChild(box);
-  if(t){renderEvidence(t.evidence); budget(t.session);}
+  flush(); close();
+  return out;
 }
 
-async function replay(start,end){
-  const send=$("#send"); send.disabled=true; send.innerHTML='<span class="spin"></span>';
-  $("#log").innerHTML='<div class="empty">Gathering metrics, logs, alerts and deploys…</div>';
-  try{
-    const r=await fetch("/api/replay",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({start,end})});
+/* ===================== header ========================================= */
+function budget(s) {
+  if (!s) return;
+  const spent = Number(s.total_usd || 0), cap = Number(s.budget_usd || 0);
+  $("#spend").textContent = "$" + spent.toFixed(4);
+  $("#cap").textContent = "/ $" + cap.toFixed(2);
+  const pct = cap > 0 ? Math.min(100, (100 * spent) / cap) : 0;
+  const m = $("#meter");
+  m.querySelector("i").style.width = pct + "%";
+  m.className = "meter" + (pct >= 90 ? " over" : pct >= 70 ? " warn" : "");
+}
+
+function working(on) {
+  BUSY = on;
+  $("#wire").classList.toggle("hidden", !on);
+  const btn = $("#send"), inputs = document.querySelectorAll("#fields input");
+  if (btn) {
+    btn.disabled = on;
+    btn.innerHTML = on ? '<span class="orbit"></span>' + (TAB === "chat" ? "Asking" : "Running")
+                       : (TAB === "chat" ? "Ask" : "Run replay");
+  }
+  inputs.forEach(i => { i.disabled = on; });
+}
+
+/* ===================== evidence rail ================================== */
+function evidenceCard(e) {
+  const src = String(e.citation_id || "").split(":")[0] || (e.provenance && e.provenance.source) || "";
+  const node = el("article", "ev" + (e.is_error ? " err" : ""));
+  node.dataset.cite = e.citation_id || "";
+
+  const query = e.is_error
+    ? e.error
+    : (e.provenance && e.provenance.query) || JSON.stringify(e.arguments || {});
+
+  const chips = [];
+  if (e.elapsed_ms != null) chips.push(`<span class="chip t">${Number(e.elapsed_ms)} ms</span>`);
+  if (e.redactions) chips.push(`<span class="chip w">${e.redactions} redacted</span>`);
+  if (e.truncated) chips.push(`<span class="chip w">truncated</span>`);
+  if (e.is_error) chips.push(`<span class="chip e">error</span>`);
+
+  const p = e.provenance || {};
+  const sub = [];
+  if (p.window) sub.push(String(p.window).replace(/\+00:00/g, "Z"));
+  if (p.step) sub.push("step " + p.step);
+  if (p.endpoint) sub.push(p.endpoint);
+  if (p.ref) sub.push(p.ref);
+  if (p.path) sub.push(p.path);
+
+  node.innerHTML =
+    `<div class="bar ${srcClass(src)}"></div><div class="body">` +
+      `<div class="top">` +
+        `<span class="tool">${esc(e.tool)}</span><span class="grow"></span>` +
+        `<span class="cid">${esc(e.citation_id || "uncited")}</span>` +
+      `</div>` +
+      `<pre class="q${e.is_error ? " bad" : ""}">${esc(String(query).slice(0, 320))}</pre>` +
+      (sub.length ? `<div class="sub">${esc(sub.join("  ·  "))}</div>` : "") +
+      (chips.length ? `<div class="chips">${chips.join("")}</div>` : "") +
+    `</div>`;
+  return node;
+}
+
+function renderEvidence(items, who) {
+  const box = $("#evbox");
+  box.innerHTML = "";
+  $("#evcount").textContent = (items || []).length;
+  $("#evwho").textContent = who || "idle";
+  if (!items || !items.length) {
+    box.innerHTML = `<div class="rail-zero">This turn made no tool calls.</div>`;
+    return;
+  }
+  items.forEach(e => box.appendChild(evidenceCard(e)));
+}
+
+function railSkeleton() {
+  const box = $("#evbox");
+  box.innerHTML = "";
+  $("#evcount").textContent = "…";
+  $("#evwho").textContent = "reading";
+  for (let i = 0; i < 4; i++) {
+    const s = el("div", "skel");
+    s.innerHTML = `<i style="width:46%"></i><i style="width:88%"></i><i style="width:64%"></i>`;
+    box.appendChild(s);
+  }
+}
+
+function railIdle(state) {
+  $("#evcount").textContent = "0";
+  $("#evwho").textContent = "idle";
+  const tools = (state && state.tools) || [];
+  const scopes = (state && state.scopes) || [];
+  $("#evbox").innerHTML =
+    `<div class="blank">` +
+      `<p class="lede">No turn yet. When you ask something, every tool call the model ` +
+      `makes lands here — the query it sent, how long it took, and the citation id the ` +
+      `answer refers to.</p>` +
+      (tools.length ? `<h3>Tools available</h3><div class="toollist">` +
+        tools.map(t => `<div>${esc(t)}<span class="ro">read only</span></div>`).join("") +
+        `</div>` : "") +
+      (scopes.length ? `<h3>Granted scopes</h3><div class="scopelist">` +
+        scopes.map(s => `<span class="chip">${esc(s)}</span>`).join("") + `</div>` : "") +
+    `</div>`;
+}
+
+/* ===================== shared turn footer ============================= */
+function verdict(t) {
+  const n = (t.citations || []).length;
+  let h = `<div class="verdict">`;
+  h += t.supported
+    ? `<span class="badge ok"><span class="g">●</span>Supported<b>${n}</b>${n === 1 ? "citation" : "citations"}</span>`
+    : `<span class="badge no"><span class="g">▲</span>Unsupported</span>`;
+  h += `<div class="facts">`;
+  h += `<span>$<b>${Number(t.cost_usd || 0).toFixed(4)}</b></span>`;
+  h += `<span><b>${(Number(t.elapsed_ms || 0) / 1000).toFixed(1)}</b>s</span>`;
+  h += `<span><b>${(t.evidence || []).length}</b> tool calls</span>`;
+  h += `<span><b>${t.model_calls || 0}</b> model calls</span>`;
+  h += `</div><div class="grow"></div>`;
+  if (t.sequence != null) {
+    h += `<button type="button" class="ghost" data-receipt="${t.sequence}">` +
+         `↓ receipt ${String(t.sequence).padStart(3, "0")}</button>`;
+  }
+  h += `</div>`;
+  // When the runtime stops early it already says why in the answer text, and
+  // repeating it verbatim underneath reads like a stutter. Show the reason
+  // block only when it adds something the answer did not already say.
+  const reason = t.unsupported_reason;
+  if (!t.supported && reason && !String(t.answer || "").includes(reason)) {
+    h += `<div class="reason"><span class="k">Why this is not supported</span>${esc(reason)}</div>`;
+  }
+  return h;
+}
+
+/* ===================== chat =========================================== */
+function askBlock(question) {
+  const n = el("div", "ask");
+  n.innerHTML = `<span class="k">Asked</span><p class="t">${esc(question)}</p>`;
+  return n;
+}
+
+function pending(question) {
+  const turn = el("article", "turn");
+  turn.appendChild(askBlock(question));
+  const w = el("div", "working");
+  w.innerHTML =
+    `<div class="top"><span class="orbit"></span><span class="lbl">Working</span></div>` +
+    `<p class="t">Choosing read-only tools and reading what they return. ` +
+    `The answer is written only after the evidence is in, so nothing appears until the turn completes.</p>` +
+    `<div class="foot"><span class="el" id="elapsed">0.0s</span>` +
+    `<span>tool calls stream into the evidence rail on completion</span></div>`;
+  turn.appendChild(w);
+  $("#col").appendChild(turn);
+  $("#log").scrollTop = $("#log").scrollHeight;
+
+  const t0 = Date.now();
+  clearInterval(TICKER);
+  TICKER = setInterval(() => {
+    const node = $("#elapsed");
+    if (!node) return clearInterval(TICKER);
+    node.textContent = ((Date.now() - t0) / 1000).toFixed(1) + "s";
+  }, 100);
+  return turn;
+}
+
+function renderTurn(host, t) {
+  clearInterval(TICKER);
+  host.innerHTML = "";
+  host.appendChild(askBlock(t.question));
+
+  const reply = el("div", "reply");
+  reply.innerHTML =
+    `<div class="reply-head"><span class="who">Copilot</span><span class="rule"></span>` +
+    `<span class="model">${esc(t.receipt_id ? "receipt " + String(t.receipt_id).slice(0, 8) : "")}</span></div>` +
+    `<div class="prose">${markdown(t.answer)}</div>` + verdict(t);
+  host.appendChild(reply);
+
+  renderEvidence(t.evidence, "turn " + (t.sequence != null ? String(t.sequence).padStart(3, "0") : "—"));
+  budget(t.session);
+  $("#log").scrollTop = $("#log").scrollHeight;
+}
+
+function failure(host, question, message) {
+  clearInterval(TICKER);
+  host.innerHTML = "";
+  host.appendChild(askBlock(question));
+  const d = el("div", "reply");
+  d.innerHTML = `<div class="reply-head"><span class="who">Copilot</span><span class="rule"></span></div>` +
+    `<div class="reason"><span class="k">The turn did not complete</span>${esc(message)}</div>`;
+  host.appendChild(d);
+}
+
+async function ask(question) {
+  zeroOut();
+  const host = pending(question);
+  railSkeleton();
+  working(true);
+  try {
+    const r = await fetch("/api/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question })
+    });
+    const t = await r.json();
+    if (t.error) { failure(host, question, t.error); renderEvidence([], "failed"); }
+    else renderTurn(host, t);
+  } catch (err) {
+    failure(host, question, String(err));
+    renderEvidence([], "failed");
+  } finally { working(false); }
+}
+
+/* ===================== replay ========================================= */
+function renderReplay(r) {
+  clearInterval(TICKER);
+  $("#log").classList.remove("centre");
+  const col = $("#col");
+  col.innerHTML = "";
+  if (r.error) {
+    const d = el("div", "turn");
+    d.innerHTML = `<div class="reason"><span class="k">Replay failed</span>${esc(r.error)}</div>`;
+    col.appendChild(d);
+    renderEvidence([], "failed");
+    return;
+  }
+
+  const w = r.window || {};
+  const short = v => String(v || "").replace(/\+00:00$/, "Z").replace("T", "  ");
+  const mins = Math.round((w.duration_seconds || 0) / 60);
+
+  const box = el("article", "turn");
+  let h = `<div class="rp-head"><div><span class="k">Window</span>` +
+    `<div class="w">${esc(short(w.start))}<span class="arrow">→</span>${esc(short(w.end))}</div></div>` +
+    `<div class="dur"><span class="k">Duration</span><div class="v">${mins} min</div></div></div>`;
+
+  h += `<div class="section">Summary</div><div class="prose">${markdown(r.summary)}</div>`;
+
+  h += `<div class="section">Timeline · ${(r.timeline || []).length} cited ${(r.timeline || []).length === 1 ? "entry" : "entries"}</div>`;
+  if ((r.timeline || []).length) {
+    h += `<ul class="tl">`;
+    for (const e of r.timeline) {
+      const src = String(e.citation_id || "").split(":")[0];
+      h += `<li data-cite="${esc(e.citation_id)}"><span class="node ${srcClass(src)}"></span>` +
+        `<div class="when">${esc(short(e.timestamp))}<span class="kind">${esc(e.source)}</span></div>` +
+        `<h4>${esc(e.headline)}</h4><p>${esc(e.detail)}</p>${chip(e.citation_id)}</li>`;
+    }
+    h += `</ul>`;
+  } else {
+    h += `<div class="conclusion"><p>No timeline entries. Every source was read and none ` +
+         `reported activity in this window — an empty timeline here means the data is empty, ` +
+         `not that it went unexamined.</p></div>`;
+  }
+
+  if (r.conclusion) {
+    h += `<div class="section">Conclusion</div><div class="conclusion"><span class="k">What the sequence suggests</span>` +
+         `<p>${inline(r.conclusion)}</p></div>`;
+  }
+
+  const dropped = r.dropped_uncited_entries || [];
+  if (dropped.length) {
+    h += `<div class="note"><b>${dropped.length}</b> narrated ${dropped.length === 1 ? "entry was" : "entries were"} ` +
+         `dropped for citing evidence this replay did not produce.</div>`;
+  }
+
+  if (r.turn) h += verdict(r.turn);
+  box.innerHTML = h;
+  col.appendChild(box);
+
+  if (r.turn) { renderEvidence(r.turn.evidence, "replay"); budget(r.turn.session); }
+  $("#log").scrollTop = 0;
+}
+
+async function replay(start, end) {
+  $("#log").classList.remove("centre");
+  const col = $("#col");
+  col.innerHTML = "";
+  const box = el("article", "turn");
+  const w = el("div", "working");
+  w.innerHTML =
+    `<div class="top"><span class="orbit"></span><span class="lbl">Gathering</span></div>` +
+    `<p class="t">Reading metrics, logs, alert state and deploys for this window. ` +
+    `The four sources are always read, so coverage does not depend on what the model thought to check.</p>` +
+    `<div class="foot"><span class="el" id="elapsed">0.0s</span><span>one model call, after gathering</span></div>`;
+  box.appendChild(w);
+  col.appendChild(box);
+  railSkeleton();
+  working(true);
+
+  const t0 = Date.now();
+  clearInterval(TICKER);
+  TICKER = setInterval(() => {
+    const n = $("#elapsed");
+    if (!n) return clearInterval(TICKER);
+    n.textContent = ((Date.now() - t0) / 1000).toFixed(1) + "s";
+  }, 100);
+
+  try {
+    const r = await fetch("/api/replay", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start, end })
+    });
     renderReplay(await r.json());
-  } finally { send.disabled=false; send.textContent="Run"; }
+  } catch (err) {
+    renderReplay({ error: String(err) });
+  } finally { working(false); }
 }
 
-function setTab(name){
-  TAB=name;
-  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("on",t.dataset.tab===name));
-  const form=$("#ask");
-  if(name==="chat"){
-    form.innerHTML=`<input type="text" id="q" placeholder="why did latency spike at 19:40?" autocomplete="off">
-      <button class="go" id="send">Ask</button>`;
-    $("#log").innerHTML=`<div class="empty" id="blank">Ask about the running system — metrics, logs,
-      alerts, dashboards, or why a line of code is the way it is.<br><br>
-      Every answer cites the tool calls behind it.</div>`;
-  }else{
-    const now=new Date(), then=new Date(now-60*60*1000), f=d=>d.toISOString().slice(0,19)+"Z";
-    form.innerHTML=`<div class="rowin" style="flex:1;margin:0">
-      <input type="text" id="s" value="${f(then)}"><span style="color:var(--faint)">→</span>
-      <input type="text" id="e" value="${f(now)}"></div><button class="go" id="send">Run</button>`;
-    $("#log").innerHTML=`<div class="empty">Pick a window and run a replay.<br><br>
-      Metrics, logs, alert state and deploys are gathered, then ordered into a cited timeline.</div>`;
+/* ===================== tabs & empty states ============================ */
+const SAMPLES = [
+  "Why did request latency spike around 21:08 UTC today? Use the metrics and check the logs for that window.",
+  "Which pods have restarted recently, and what do the logs and alert rules tell us about why?",
+  "Why is the worker configured with FOR UPDATE SKIP LOCKED? Answer from the repository's history and docs, and cite the commits."
+];
+
+function zeroOut() { $("#zero")?.remove(); $("#log").classList.remove("centre"); }
+
+function iso(d) { return new Date(d).toISOString().slice(0, 19) + "Z"; }
+
+function setTab(name) {
+  if (BUSY) return;
+  TAB = name;
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.dataset.tab === name));
+  ACTIVE = null;
+  const col = $("#col"), fields = $("#fields"), hints = $("#hints");
+
+  if (name === "chat") {
+    fields.innerHTML =
+      `<label class="field"><span class="caret">?</span>` +
+      `<input type="text" id="q" placeholder="Ask about the running system…"></label>` +
+      `<button class="go" id="send" type="submit">Ask</button>`;
+    hints.innerHTML = `<span><kbd>Enter</kbd> to ask</span>` +
+      `<span>answers are refused rather than guessed when the evidence is thin</span>` +
+      `<span>every turn is signed into the receipt chain</span>`;
+    col.innerHTML =
+      `<div class="zero" id="zero">` +
+        `<span class="mark">● live · read-only</span>` +
+        `<h2>Ask about the running system.</h2>` +
+        `<p>Metrics, logs, alerts, dashboards and the repository's own history are ` +
+        `available as read-only tools. Every claim in an answer carries the citation ` +
+        `of the tool call it came from, and an answer that cannot be cited is marked ` +
+        `unsupported rather than dressed up.</p>` +
+        `<div class="samples">` +
+          SAMPLES.map(s => `<button type="button" class="sample" data-ask="${esc(s)}">` +
+            `<span class="ar">→</span>${esc(s)}</button>`).join("") +
+        `</div>` +
+      `</div>`;
+    $("#log").classList.add("centre");
+    railIdle(STATE);
+    $("#q").focus();
+  } else {
+    const now = Date.now();
+    fields.innerHTML =
+      `<div class="window"><span class="k">From</span>` +
+      `<input type="text" id="wstart" value="${iso(now - 36e5)}">` +
+      `<span class="arrow">→</span><span class="k">To</span>` +
+      `<input type="text" id="wend" value="${iso(now)}">` +
+      `<span class="presets">` +
+        `<button type="button" class="preset" data-mins="15">15m</button>` +
+        `<button type="button" class="preset" data-mins="60">1h</button>` +
+        `<button type="button" class="preset" data-mins="360">6h</button>` +
+      `</span></div>` +
+      `<button class="go" id="send" type="submit">Run replay</button>`;
+    hints.innerHTML = `<span>RFC3339, UTC</span>` +
+      `<span>four sources always read — metrics, logs, alerts, deploys</span>` +
+      `<span>one model call, so the cost is fixed</span>`;
+    col.innerHTML =
+      `<div class="zero" id="zero">` +
+        `<span class="mark">● incident replay</span>` +
+        `<h2>Reconstruct a window as a cited timeline.</h2>` +
+        `<p>Evidence gathering here is scripted, not model-driven: metrics, logs, alert ` +
+        `state and deploys are always read, so a gap in the timeline means the data is ` +
+        `genuinely empty rather than unexamined. The model only orders the events and ` +
+        `says what they suggest — and any entry it cannot cite is dropped.</p>` +
+      `</div>`;
+    $("#log").classList.add("centre");
+    railIdle(STATE);
   }
-  $("#ev").innerHTML=""; $("#q")?.focus();
 }
 
-document.addEventListener("click",e=>{
-  const tab=e.target.closest(".tab"); if(tab){setTab(tab.dataset.tab);return}
-  const dl=e.target.closest("[data-dl]");
-  if(dl){window.location=`/api/receipt/${dl.dataset.dl}`;return}
-  const c=e.target.closest("[data-cite]");
-  if(c&&c.dataset.cite){
-    document.querySelectorAll(".ev").forEach(x=>x.classList.remove("hit"));
-    const hit=document.querySelector(`.ev[data-cite="${c.dataset.cite}"]`);
-    if(hit){hit.classList.add("hit");hit.scrollIntoView({block:"center",behavior:"smooth"})}
+/* ===================== citation ↔ evidence ============================ */
+
+/* `scrollIntoView` walks every scrollable ancestor, which here means it drags
+   the answer column along when all that should move is the rail. Scroll the
+   one container that owns the element instead. */
+function centreIn(scroller, node) {
+  if (!scroller || !node) return;
+  const a = node.getBoundingClientRect(), b = scroller.getBoundingClientRect();
+  const top = scroller.scrollTop + (a.top - b.top) - (b.height - a.height) / 2;
+  scroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+}
+
+/** Clicking a citation anywhere highlights it everywhere. Which side scrolls
+ *  depends on which side was clicked: click a chip and the rail comes to you,
+ *  click a card and the answer does. */
+function highlight(id, from) {
+  ACTIVE = ACTIVE === id ? null : id;
+  const mark = (sel) => document.querySelectorAll(sel).forEach(
+    n => n.classList.toggle("on", !!ACTIVE && n.dataset.cite === ACTIVE));
+  mark(".cite"); mark(".ev"); mark(".tl li");
+  if (!ACTIVE) return;
+  if (from === "rail") centreIn($("#log"), document.querySelector(`.cite[data-cite="${CSS.escape(ACTIVE)}"]`));
+  else centreIn($("#evbox"), document.querySelector(`.ev[data-cite="${CSS.escape(ACTIVE)}"]`));
+}
+
+document.addEventListener("click", ev => {
+  const tab = ev.target.closest(".tab");
+  if (tab) return setTab(tab.dataset.tab);
+
+  const sample = ev.target.closest("[data-ask]");
+  if (sample && !BUSY) return ask(sample.dataset.ask);
+
+  const receipt = ev.target.closest("[data-receipt]");
+  if (receipt) { window.location = "/api/receipt/" + receipt.dataset.receipt; return; }
+
+  const preset = ev.target.closest(".preset");
+  if (preset) {
+    const now = Date.now();
+    $("#wstart").value = iso(now - preset.dataset.mins * 6e4);
+    $("#wend").value = iso(now);
+    return;
+  }
+
+  const source = ev.target.closest("[data-cite]");
+  if (source && source.dataset.cite) {
+    return highlight(source.dataset.cite, source.classList.contains("ev") ? "rail" : "answer");
   }
 });
 
-document.addEventListener("submit",e=>{
-  e.preventDefault();
-  if(TAB==="chat"){
-    const v=$("#q").value.trim(); if(!v)return; $("#q").value=""; ask(v);
-  }else replay($("#s").value.trim(),$("#e").value.trim());
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape" && ACTIVE) highlight(ACTIVE);
 });
 
-fetch("/api/state").then(r=>r.json()).then(s=>{
-  budget({total_usd:s.total_usd,budget_usd:s.budget_usd});
-  $("#sidehint").textContent=`${s.tools.length} read-only tools · key ${s.key_fingerprint}`;
+$("#composer").addEventListener("submit", ev => {
+  ev.preventDefault();
+  if (BUSY) return;
+  if (TAB === "chat") {
+    const input = $("#q"), value = input.value.trim();
+    if (!value) return;
+    input.value = "";
+    ask(value);
+  } else {
+    replay($("#wstart").value.trim(), $("#wend").value.trim());
+  }
 });
+
+/* ===================== boot =========================================== */
+let STATE = null;
+setTab("chat");
+fetch("/api/state").then(r => r.json()).then(s => {
+  STATE = s;
+  budget({ total_usd: s.total_usd, budget_usd: s.budget_usd });
+  $("#fpr").textContent = s.key_fingerprint || "—";
+  $("#fpr").title = "Ed25519 key fingerprint " + (s.key_fingerprint || "");
+  $("#sid").textContent = String(s.session_id || "").slice(0, 8) || "—";
+  $("#sid").title = "receipt chain session " + (s.session_id || "");
+  $("#railsub").textContent =
+    `${(s.tools || []).length} read-only tools · ${(s.scopes || []).length} scopes · no write exists in the vocabulary`;
+  if (TAB === "chat" && $("#zero")) railIdle(s);
+}).catch(() => {});
 </script></body></html>
