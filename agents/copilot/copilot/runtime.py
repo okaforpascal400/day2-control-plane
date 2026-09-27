@@ -180,7 +180,10 @@ or three sentences a non-technical reader can follow: what happened and why, \
 in everyday words. No jargon, no metric or label names, no query syntax, no \
 citation ids. It restates only what the technical answer below it states and \
 cites, so it adds no claim of its own; if the answer is that the data does not \
-show something, say that plainly here too. Then give the technical answer \
+show something, say that plainly here too. If the technical answer carries a \
+caveat or limit, the summary must carry it too, in plain words: a summary \
+that keeps the reassuring part and drops the qualification overstates the \
+evidence. Then give the technical answer \
 exactly as you otherwise would, with every citation inline."""
 
 
