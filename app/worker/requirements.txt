@@ -1,7 +1,7 @@
 # Runtime deps, exact pins per CLAUDE.md rule 2 (no floating versions).
 sqlalchemy[asyncio]==2.1.1
 asyncpg==0.31.0
-pydantic==2.13.4
+pydantic==2.14.0
 pydantic-settings==2.14.2
 # /metrics for Prometheus (queue depth, drain rate, job processing time).
 prometheus-client==0.26.0
