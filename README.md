@@ -9,3 +9,4 @@ quarterly audits. Least-privilege, audit-logged, human-in-the-loop.
 See [DAY2.md](DAY2.md) and [ROADMAP.md](ROADMAP.md).
 
 > Under active construction. Built by Pascal Okafor.
+> Built with AI coding assistance under human review; every merge is approved by the maintainer.
