@@ -23,8 +23,8 @@ Three rules:
    `agent-x/y` and `agentfoo/z` are all still refused. A guardrail loosened by
    a sloppy regex is a guardrail removed.
 2. **Merging is not implemented.** `GitHubHelper.merge_pull_request` exists only
-   to raise. Humans approve (ENGINEERING-RULES.md rule 3), so the capability is absent from
-   the library rather than gated behind a flag.
+   to raise. Humans approve (ENGINEERING-RULES.md rule 3), so the capability is
+   absent from the library rather than gated behind a flag.
 3. **Some paths are never in a proposed diff.** A triage agent that can edit
    `.github/` can edit the workflow that triggers it and the CI gates that judge
    it — it could propose a "fix" that disables the test that caught the bug. It
